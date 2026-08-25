@@ -50,8 +50,8 @@ export default function OwnerDashboard({ session, backendUrl }) {
 
   // Selected product for Prophet forecasting
   const [selectedForecastProduct, setSelectedForecastProduct] = useState('');
+  const [forecastPeriod, setForecastPeriod] = useState(7);
   const [forecastData, setForecastData] = useState(null);
-
   const [loading, setLoading] = useState(false);
 
   // Fetch shop and profile details on load
@@ -309,10 +309,10 @@ export default function OwnerDashboard({ session, backendUrl }) {
     }
   };
 
-  // Fetch Prophet Forecast data
-  const fetchForecast = async (productId) => {
+  /// Fetch Prophet Forecast data
+  const fetchForecast = async (productId, period = forecastPeriod) => {
     try {
-      const res = await fetch(`${backendUrl}/api/forecasts/product/${productId}`, {
+      const res = await fetch(`${backendUrl}/api/forecasts/product/${productId}?periods=${period}`, {
         headers: { 'Authorization': `Bearer ${session.access_token}` }
       });
       if (res.ok) {
@@ -326,7 +326,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
 
   const handleForecastProductChange = (productId) => {
     setSelectedForecastProduct(productId);
-    fetchForecast(productId);
+    fetchForecast(productId, forecastPeriod);
   };
 
   // Calculations for stats
@@ -732,11 +732,28 @@ export default function OwnerDashboard({ session, backendUrl }) {
                 >
                   {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
+                <select
+                  className="suggestions-select"
+                  value={forecastPeriod}
+                  onChange={(e) => {
+                    const period = parseInt(e.target.value, 10);
+                    setForecastPeriod(period);
+
+                    if (selectedForecastProduct) {
+                      fetchForecast(selectedForecastProduct, period);
+                    }
+                  }}
+                  style={{ padding: '6px 12px' }}
+                >
+                  <option value={7}>Next 7 Days</option>
+                  <option value={14}>Next 14 Days</option>
+                  <option value={30}>Next 1 Month</option>
+                </select>
               </div>
             </div>
 
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-              Using historic sales history logged on successful paid purchases, Meta Prophet trains a time-series model on-the-fly to predict inventory demand for the next 7 days.
+              Using the trained Meta Prophet model, this dashboard predicts future product demand for the selected forecasting period.
             </p>
 
             {forecastData && forecastData.forecast.length > 0 ? (
@@ -770,13 +787,41 @@ export default function OwnerDashboard({ session, backendUrl }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {forecastData.forecast.map((f, idx) => (
-                        <tr key={idx}>
-                          <td>{f.ds}</td>
-                          <td style={{ fontWeight: '700', color: 'var(--primary)' }}>{f.yhat} units</td>
-                          <td>{f.yhat_lower} to {f.yhat_upper} units</td>
-                        </tr>
-                      ))}
+                      {forecastData.forecast.map((f, idx) => {
+                        const selectedProduct = products.find(
+                          p => Number(p.id) === Number(selectedForecastProduct)
+                        );
+
+                        const unit = selectedProduct?.unit || 'units';
+
+                        const formatForecastValue = (value, unit) => {
+                          if (['piece', 'bottle', 'pack'].includes(unit)) {
+                            return Math.round(value);
+                          }
+
+                          if (unit === 'litre') {
+                            return Math.round(value * 2) / 2;
+                          }
+
+                          return Number(value).toFixed(2);
+                        };
+
+                        const predictedValue = formatForecastValue(f.yhat, unit);
+                        const lowerValue = formatForecastValue(f.yhat_lower, unit);
+                        const upperValue = formatForecastValue(f.yhat_upper, unit);
+
+                        return (
+                          <tr key={idx}>
+                            <td>{f.ds}</td>
+                            <td style={{ fontWeight: '700', color: 'var(--primary)' }}>
+                              {predictedValue} {unit}
+                            </td>
+                            <td>
+                              {lowerValue} to {upperValue} {unit}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
