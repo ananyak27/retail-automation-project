@@ -194,6 +194,30 @@ def generate_forecast(
 
         return []
 
+def get_predicted_demand(
+    db: Session,
+    product_id: int,
+    periods: int = 7
+) -> float:
+    """
+    Return total predicted demand for the next N days.
+    """
+
+    forecast = generate_forecast(
+        db=db,
+        product_id=product_id,
+        periods=periods
+    )
+
+    if not forecast:
+        return 0.0
+
+    predicted_demand = sum(
+        item["yhat"]
+        for item in forecast
+    )
+
+    return round(predicted_demand, 2)
 
 # ============================================================
 # MODEL COUNT

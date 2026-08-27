@@ -38,6 +38,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
   
   // Create product form state
   const [newProdName, setNewProdName] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState(null);
   const [newProdUnit, setNewProdUnit] = useState('kg');
   const [newProdPrice, setNewProdPrice] = useState('');
   const [newProdStock, setNewProdStock] = useState('');
@@ -68,7 +69,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
       fetchAlerts();
 
       // Setup WebSocket for real-time dashboard alerts
-      const socket = new WebSocket(`ws://${backendUrl.replace('http://', '')}/ws/${session.phone_number.replace('+', '')}`);
+      const socket = new WebSocket(`ws://${backendUrl.replace('http://', '')}/ws/${session.user_id}`);
       
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -78,6 +79,9 @@ export default function OwnerDashboard({ session, backendUrl }) {
         fetchAlerts();
         fetchOrders();
         fetchProducts(); // Refresh stock levels
+        if (data.type === "low_stock") {
+          alert(data.message);
+        }
       };
 
       return () => socket.close();
@@ -183,39 +187,108 @@ export default function OwnerDashboard({ session, backendUrl }) {
     }
   };
 
+  const productSuggestions = products.filter(p =>
+    newProdName.trim() !== '' &&
+    p.name.toLowerCase().includes(newProdName.toLowerCase())
+  );
+
   const handleAddProduct = async (e) => {
     e.preventDefault();
+
     if (!newProdName.trim() || !newProdPrice || !newProdStock) return;
 
     try {
-      const res = await fetch(`${backendUrl}/api/products/?shop_id=${shop.id}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          name: newProdName,
-          unit: newProdUnit,
-          price: parseFloat(newProdPrice),
-          stock: parseFloat(newProdStock),
-          min_stock_threshold: parseFloat(newProdThreshold)
-        })
-      });
+      // Existing product selected → UPDATE it
+      if (selectedProduct) {
+        const res = await fetch(
+          `${backendUrl}/api/products/${selectedProduct.id}`,
+          {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({
+              name: newProdName.trim(),
+              unit: newProdUnit,
+              price: parseFloat(newProdPrice),
+              stock: parseFloat(newProdStock),
+              min_stock_threshold: parseFloat(newProdThreshold)
+            })
+          }
+        );
+
+        if (res.ok) {
+          setNewProdName('');
+          setNewProdPrice('');
+          setNewProdStock('');
+          setNewProdThreshold('10');
+          setSelectedProduct(null);
+          fetchProducts();
+          alert("Product updated successfully!");
+        } else {
+          alert("Failed to update product");
+        }
+
+        return;
+      }
+
+      // New product → CREATE it
+      const res = await fetch(
+        `${backendUrl}/api/products/?shop_id=${shop.id}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({
+            name: newProdName.trim(),
+            unit: newProdUnit,
+            price: parseFloat(newProdPrice),
+            stock: parseFloat(newProdStock),
+            min_stock_threshold: parseFloat(newProdThreshold)
+          })
+        }
+      );
 
       if (res.ok) {
-        // Clear fields
         setNewProdName('');
         setNewProdPrice('');
         setNewProdStock('');
         setNewProdThreshold('10');
+        setSelectedProduct(null);
         fetchProducts();
-        alert("Product added successfully! Initial 90 days sales seed data generated for forecasting models.");
+        alert("Product added successfully!");
       } else {
         alert("Failed to add product");
       }
+
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleDeleteProduct = async (productId, productName) => {
+    if (!window.confirm(`Delete "${productName}"?`)) return;
+
+    try {
+      const res = await fetch(`${backendUrl}/api/products/${productId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`
+        }
+      });
+
+      if (res.ok) {
+        alert("Product deleted successfully!");
+        fetchProducts();
+      } else {
+        alert("Failed to delete product");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete product");
     }
   };
 
@@ -652,10 +725,60 @@ export default function OwnerDashboard({ session, backendUrl }) {
                 <Plus size={18} /> Add New Catalog Product
               </h3>
               <form onSubmit={handleAddProduct} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', alignItems: 'end' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Product Name</label>
-                  <input type="text" className="form-input" placeholder="Rice / Milk" value={newProdName} onChange={e => setNewProdName(e.target.value)} required />
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label">Product Name</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Rice / Milk"
+                    value={newProdName}
+                    onChange={e => {
+                      setNewProdName(e.target.value);
+                      setSelectedProduct(null);
+                    }}
+                    required
+                  />
+
+                  {newProdName.trim() && productSuggestions.length > 0 && !selectedProduct && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        background: '#fff',
+                        border: '1px solid #ddd',
+                        borderRadius: '6px',
+                        zIndex: 1000,
+                        maxHeight: '180px',
+                        overflowY: 'auto'
+                      }}
+                    >
+                      {productSuggestions.map(product => (
+                        <div
+                          key={product.id}
+                          onClick={() => {
+                            setSelectedProduct(product);
+                            setNewProdName(product.name);
+                            setNewProdUnit(product.unit);
+                            setNewProdPrice(product.price);
+                            setNewProdStock(product.stock);
+                            setNewProdThreshold(product.min_stock_threshold);
+                          }}
+                          style={{
+                            padding: '10px 12px',
+                            cursor: 'pointer',
+                            borderBottom: '1px solid #eee'
+                          }}
+                        >
+                          {product.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
+              </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Unit</label>
                   <select className="form-input" value={newProdUnit} onChange={e => setNewProdUnit(e.target.value)}>
@@ -677,8 +800,10 @@ export default function OwnerDashboard({ session, backendUrl }) {
                   <label className="form-label">Min Threshold</label>
                   <input type="number" className="form-input" placeholder="10" value={newProdThreshold} onChange={e => setNewProdThreshold(e.target.value)} />
                 </div>
-                <button type="submit" className="btn-primary" style={{ height: '46px' }}>Add Product</button>
-              </form>
+                <button type="submit" className="btn-primary" style={{ height: '46px' }}>
+                  {selectedProduct ? 'Update Product' : 'Add Product'}
+                </button>       
+               </form>
             </div>
 
             <div className="card-content">
@@ -692,6 +817,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
                       <th>Stock Level</th>
                       <th>Min Threshold</th>
                       <th>Unit</th>
+                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -706,6 +832,15 @@ export default function OwnerDashboard({ session, backendUrl }) {
                         </td>
                         <td>{p.min_stock_threshold}</td>
                         <td style={{ textTransform: 'lowercase' }}>{p.unit}</td>
+                        <td>
+                        <button
+                          className="btn-close-alert"
+                          style={{ color: 'var(--error)' }}
+                          onClick={() => handleDeleteProduct(p.id, p.name)}
+                        >
+                          Delete
+                        </button>
+                      </td>
                       </tr>
                     ))}
                   </tbody>

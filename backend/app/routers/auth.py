@@ -157,7 +157,8 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
         "access_token": access_token,
         "token_type": "bearer",
         "role": user.role,
-        "phone_number": user.phone_number
+        "phone_number": user.phone_number,
+        "user_id": user.id
     }
 
 @router.post("/register-owner", response_model=Token)
@@ -216,7 +217,8 @@ def register_owner(payload: OwnerRegister, db: Session = Depends(get_db)):
         "access_token": access_token,
         "token_type": "bearer",
         "role": user.role,
-        "phone_number": user.phone_number
+        "phone_number": user.phone_number,
+        "user_id": user.id,
     }
 
 @router.get("/me", response_model=UserResponse)

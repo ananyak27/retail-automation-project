@@ -55,7 +55,10 @@ def get_products(shop_id: int = Query(...), db: Session = Depends(get_db)):
     """
     Lists all products of a specific shop.
     """
-    return db.query(Product).filter(Product.shop_id == shop_id).all()
+    return db.query(Product).filter(
+        Product.shop_id == shop_id,
+        Product.is_active == True
+    ).all()
 
 @router.put("/{product_id}", response_model=ProductResponse)
 def update_product(
@@ -87,26 +90,42 @@ def update_product(
     db.refresh(product)
     return product
 
-@router.delete("/{product_id}", status_code=204)
+@router.delete("/{product_id}")
 def delete_product(
     product_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Deletes a product from the catalog.
-    """
     if current_user.role != "owner":
-        raise HTTPException(status_code=403, detail="Only shop owners can delete products.")
-        
+        raise HTTPException(
+            status_code=403,
+            detail="Only shop owners can delete products."
+        )
+
     product = db.query(Product).filter(Product.id == product_id).first()
+
     if not product:
-        raise HTTPException(status_code=404, detail="Product not found.")
-        
-    shop = db.query(Shop).filter(Shop.id == product.shop_id, Shop.owner_id == current_user.id).first()
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found."
+        )
+
+    shop = db.query(Shop).filter(
+        Shop.id == product.shop_id,
+        Shop.owner_id == current_user.id
+    ).first()
+
     if not shop:
-        raise HTTPException(status_code=403, detail="You do not own the shop this product belongs to.")
-        
-    db.delete(product)
+        raise HTTPException(
+            status_code=403,
+            detail="You do not own this product."
+        )
+
+    # Soft delete: keep order/sales/forecast history
+    product.is_active = False
+
     db.commit()
-    return
+
+    return {
+        "message": "Product deleted successfully"
+    }

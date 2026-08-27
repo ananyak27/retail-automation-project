@@ -49,6 +49,7 @@ class Product(Base):
     price = Column(Float, nullable=False)
     stock = Column(Float, nullable=False)
     min_stock_threshold = Column(Float, default=10.0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships

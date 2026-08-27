@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 import razorpay
 import hmac
 import hashlib
+import json
 import logging
 import datetime
 from app.database import get_db
@@ -10,6 +11,8 @@ from app.models import Order, Product, SalesHistory, Alert, Shop, User
 from app.config import settings
 from app.routers.auth import get_current_user
 from app.websocket_manager import manager
+
+from app.services.forecast_service import get_predicted_demand
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 logger = logging.getLogger(__name__)
@@ -53,26 +56,53 @@ async def process_successful_payment(order: Order, db: Session, method: str, pay
             db.add(history)
             
             # Check Alert System: Low Stock Alert
-            if product.stock <= product.min_stock_threshold:
+            # Check Alert System: Low Stock Alert
+            # Alert will be generated only when:
+            # 1. Predicted demand is greater than current stock
+            # 2. Current stock is below the minimum threshold
+
+            current_stock = product.stock
+            min_threshold = product.min_stock_threshold
+
+            # TODO: Get predicted demand from Prophet
+            predicted_demand = get_predicted_demand(
+                db=db,
+                product_id=product.id,
+                periods=7
+            )
+
+            if predicted_demand > current_stock and current_stock < min_threshold:
                 alert = Alert(
                     shop_id=product.shop_id,
                     type="low_stock",
-                    message=f"Low Stock Alert: '{product.name}' stock is {product.stock} {product.unit} (threshold: {product.min_stock_threshold})."
+                    message=(
+                        f"Low Stock Alert: '{product.name}' stock is "
+                        f"{current_stock} {product.unit}. "
+                        f"Minimum threshold: {min_threshold}. "
+                        f"Predicted demand: {predicted_demand}."
+                    )
                 )
                 db.add(alert)
                 db.commit()
-                
+
                 # Send Low Stock WebSocket Alert to Owner
                 shop = db.query(Shop).filter(Shop.id == product.shop_id).first()
+
                 if shop:
                     ws_alert = {
                         "type": "low_stock",
                         "product_id": product.id,
                         "product_name": product.name,
                         "message": alert.message,
-                        "stock": product.stock
+                        "stock": current_stock,
+                        "threshold": min_threshold,
+                        "predicted_demand": predicted_demand
                     }
-                    await manager.send_personal_message(ws_alert, shop.owner_id)
+
+                    await manager.send_personal_message(
+                        ws_alert,
+                        shop.owner_id
+                    )
 
     db.commit()
 
