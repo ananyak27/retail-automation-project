@@ -71,19 +71,29 @@ async def process_successful_payment(order: Order, db: Session, method: str, pay
                 periods=7
             )
 
-            if predicted_demand > current_stock and current_stock < min_threshold:
-                alert = Alert(
-                    shop_id=product.shop_id,
-                    type="low_stock",
-                    message=(
-                        f"Low Stock Alert: '{product.name}' stock is "
-                        f"{current_stock} {product.unit}. "
-                        f"Minimum threshold: {min_threshold}. "
-                        f"Predicted demand: {predicted_demand}."
+            if current_stock <= min_threshold or (predicted_demand > current_stock and current_stock < min_threshold):
+                existing_alert = db.query(Alert).filter(
+                    Alert.shop_id == product.shop_id,
+                    Alert.type == "low_stock",
+                    Alert.is_read == False,
+                    Alert.message.like(f"%'{product.name}'%")
+                ).first()
+
+                if not existing_alert:
+                    alert = Alert(
+                        shop_id=product.shop_id,
+                        type="low_stock",
+                        message=(
+                            f"Low Stock Alert: '{product.name}' stock is "
+                            f"{current_stock} {product.unit}. "
+                            f"Minimum quantity: {min_threshold}."
+                        )
                     )
-                )
-                db.add(alert)
-                db.commit()
+                    db.add(alert)
+                    db.commit()
+                    alert_msg = alert.message
+                else:
+                    alert_msg = existing_alert.message
 
                 # Send Low Stock WebSocket Alert to Owner
                 shop = db.query(Shop).filter(Shop.id == product.shop_id).first()
@@ -93,7 +103,7 @@ async def process_successful_payment(order: Order, db: Session, method: str, pay
                         "type": "low_stock",
                         "product_id": product.id,
                         "product_name": product.name,
-                        "message": alert.message,
+                        "message": alert_msg,
                         "stock": current_stock,
                         "threshold": min_threshold,
                         "predicted_demand": predicted_demand

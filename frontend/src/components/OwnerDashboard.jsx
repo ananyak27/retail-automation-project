@@ -51,9 +51,24 @@ export default function OwnerDashboard({ session, backendUrl }) {
 
   // Selected product for Prophet forecasting
   const [selectedForecastProduct, setSelectedForecastProduct] = useState('');
+  const [forecastSearchQuery, setForecastSearchQuery] = useState('');
+  const [showForecastSuggestions, setShowForecastSuggestions] = useState(false);
   const [forecastPeriod, setForecastPeriod] = useState(7);
   const [forecastData, setForecastData] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // Low Stock Notification & Modal state
+  const [showLowStockModal, setShowLowStockModal] = useState(false);
+  const [activeLowStockNotification, setActiveLowStockNotification] = useState(null);
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState(new Set());
+  const [restockQtyMap, setRestockQtyMap] = useState({});
+
+  // Product Form Mode state: 'add' or 'update'
+  const [productFormMode, setProductFormMode] = useState('add');
+  const [updateSearchQuery, setUpdateSearchQuery] = useState('');
+  const [showUpdateSuggestions, setShowUpdateSuggestions] = useState(false);
+  const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
+  const [notifFilter, setNotifFilter] = useState('all');
 
   // Fetch shop and profile details on load
   useEffect(() => {
@@ -75,12 +90,22 @@ export default function OwnerDashboard({ session, backendUrl }) {
         const data = JSON.parse(event.data);
         console.log("WebSocket Owner received alert:", data);
         
-        // Refresh alert list and orders list automatically
+        // Refresh alert list, products, and orders automatically
         fetchAlerts();
         fetchOrders();
         fetchProducts(); // Refresh stock levels
+
         if (data.type === "low_stock") {
-          alert(data.message);
+          setActiveLowStockNotification({
+            id: data.alert_id || Date.now(),
+            product_name: data.product_name || "Product",
+            message: data.message,
+            stock: data.stock,
+            threshold: data.threshold
+          });
+        } else if (data.type === "stock_updated") {
+          fetchProducts();
+          fetchAlerts();
         }
       };
 
@@ -149,6 +174,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
         setProducts(data);
         if (data.length > 0 && !selectedForecastProduct) {
           setSelectedForecastProduct(data[0].id.toString());
+          setForecastSearchQuery(data[0].name);
           fetchForecast(data[0].id);
         }
       }
@@ -180,26 +206,160 @@ export default function OwnerDashboard({ session, backendUrl }) {
       });
       if (res.ok) {
         const data = await res.json();
-        setAlerts(data.filter(a => !a.is_read));
+        setAlerts(data);
+
+        // Check if there is an unread alert to pop up
+        const unreadAlerts = data.filter(a => !a.is_read);
+        if (unreadAlerts.length > 0 && !activeLowStockNotification) {
+          const topAlert = unreadAlerts[0];
+          if (!dismissedNotificationIds.has(topAlert.id)) {
+            setActiveLowStockNotification({
+              id: topAlert.id,
+              type: topAlert.type,
+              message: topAlert.message
+            });
+          }
+        }
       }
     } catch (err) {
       console.error(err);
     }
   };
 
-  const productSuggestions = products.filter(p =>
-    newProdName.trim() !== '' &&
-    p.name.toLowerCase().includes(newProdName.toLowerCase())
+  const handleDismissNotification = (alertId) => {
+    // Only closes the popup overlay; does NOT mark read or delete from DB
+    setActiveLowStockNotification(null);
+    if (alertId) {
+      setDismissedNotificationIds(prev => new Set(prev).add(alertId));
+    }
+  };
+
+  const handleViewNotificationAction = (notification) => {
+    if (!notification) return;
+    setActiveLowStockNotification(null);
+    if (notification.id) {
+      setDismissedNotificationIds(prev => new Set(prev).add(notification.id));
+    }
+    if (notification.type === 'low_stock') {
+      setShowLowStockModal(true);
+    } else if (notification.type === 'new_order' || notification.type === 'payment' || notification.type === 'payment_success') {
+      setActiveTab('orders');
+    } else {
+      setActiveTab('notifications');
+    }
+  };
+
+  const handleMarkAlertUnread = async (alertId) => {
+    try {
+      const res = await fetch(`${backendUrl}/api/alerts/${alertId}/unread`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      });
+      if (res.ok) {
+        fetchAlerts();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleMarkAllAlertsRead = async () => {
+    if (!shop) return;
+    try {
+      const res = await fetch(`${backendUrl}/api/alerts/mark-all-read/shop/${shop.id}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      });
+      if (res.ok) {
+        fetchAlerts();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleQuickRestock = async (product, addQuantity) => {
+    const qty = parseFloat(addQuantity);
+    if (isNaN(qty) || qty <= 0) {
+      alert("Please enter a valid restock quantity.");
+      return;
+    }
+
+    const updatedStock = parseFloat(product.stock) + qty;
+    try {
+      const res = await fetch(`${backendUrl}/api/products/${product.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          stock: updatedStock
+        })
+      });
+
+      if (res.ok) {
+        fetchProducts();
+        fetchAlerts();
+        setRestockQtyMap(prev => ({ ...prev, [product.id]: '' }));
+      } else {
+        alert("Failed to restock product.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error restocking product.");
+    }
+  };
+
+  const resetProductForm = (mode = 'add') => {
+    setProductFormMode(mode);
+    setNewProdName('');
+    setNewProdUnit('kg');
+    setNewProdPrice('');
+    setNewProdStock('');
+    setNewProdThreshold('10');
+    setSelectedProduct(null);
+    setUpdateSearchQuery('');
+    setShowUpdateSuggestions(false);
+  };
+
+  // Add mode suggestions (starting from 1st typed letter)
+  const addModeSuggestions = products.filter(p =>
+    newProdName.trim().length >= 1 &&
+    p.name.toLowerCase().includes(newProdName.trim().toLowerCase())
   );
+
+  // Update mode suggestions (starting from 1st typed letter)
+  const updateSuggestions = products.filter(p =>
+    updateSearchQuery.trim().length >= 1 &&
+    p.name.toLowerCase().includes(updateSearchQuery.trim().toLowerCase())
+  );
+
+  // Forecast mode suggestions (starting from 1st typed letter)
+  const forecastSuggestions = products.filter(p =>
+    forecastSearchQuery.trim().length >= 1 &&
+    p.name.toLowerCase().includes(forecastSearchQuery.trim().toLowerCase())
+  );
+
+  // Find exact duplicate match in Add mode
+  const duplicateMatchInAddMode = productFormMode === 'add' && newProdName.trim().length >= 1
+    ? products.find(p => p.name.trim().toLowerCase() === newProdName.trim().toLowerCase())
+    : null;
 
   const handleAddProduct = async (e) => {
     e.preventDefault();
 
     if (!newProdName.trim() || !newProdPrice || !newProdStock) return;
+    const trimmedName = newProdName.trim();
 
     try {
-      // Existing product selected → UPDATE it
-      if (selectedProduct) {
+      // MODE: UPDATE PRODUCT
+      if (productFormMode === 'update') {
+        if (!selectedProduct) {
+          alert("Please search and select an existing product to update.");
+          return;
+        }
+
         const res = await fetch(
           `${backendUrl}/api/products/${selectedProduct.id}`,
           {
@@ -209,7 +369,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               'Authorization': `Bearer ${session.access_token}`
             },
             body: JSON.stringify({
-              name: newProdName.trim(),
+              name: trimmedName,
               unit: newProdUnit,
               price: parseFloat(newProdPrice),
               stock: parseFloat(newProdStock),
@@ -219,21 +379,29 @@ export default function OwnerDashboard({ session, backendUrl }) {
         );
 
         if (res.ok) {
-          setNewProdName('');
-          setNewProdPrice('');
-          setNewProdStock('');
-          setNewProdThreshold('10');
-          setSelectedProduct(null);
+          resetProductForm('add');
           fetchProducts();
-          alert("Product updated successfully!");
+          alert(`Product "${trimmedName}" updated successfully!`);
         } else {
-          alert("Failed to update product");
+          const errData = await res.json();
+          alert(errData.detail || "Failed to update product");
         }
 
         return;
       }
 
-      // New product → CREATE it
+      // MODE: ADD PRODUCT
+      // 1. Client-Side Duplicate Verification
+      const existingProduct = products.find(
+        p => p.name.trim().toLowerCase() === trimmedName.toLowerCase()
+      );
+
+      if (existingProduct) {
+        alert(`A product named "${existingProduct.name}" already exists in your shop catalog. Please switch to "Update Product" mode to modify it.`);
+        return;
+      }
+
+      // 2. Create Product API Call
       const res = await fetch(
         `${backendUrl}/api/products/?shop_id=${shop.id}`,
         {
@@ -243,7 +411,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
             'Authorization': `Bearer ${session.access_token}`
           },
           body: JSON.stringify({
-            name: newProdName.trim(),
+            name: trimmedName,
             unit: newProdUnit,
             price: parseFloat(newProdPrice),
             stock: parseFloat(newProdStock),
@@ -253,19 +421,17 @@ export default function OwnerDashboard({ session, backendUrl }) {
       );
 
       if (res.ok) {
-        setNewProdName('');
-        setNewProdPrice('');
-        setNewProdStock('');
-        setNewProdThreshold('10');
-        setSelectedProduct(null);
+        resetProductForm('add');
         fetchProducts();
-        alert("Product added successfully!");
+        alert(`Product "${trimmedName}" added to catalog successfully!`);
       } else {
-        alert("Failed to add product");
+        const errData = await res.json();
+        alert(errData.detail || "Failed to add product");
       }
 
     } catch (err) {
       console.error(err);
+      alert("Error saving product.");
     }
   };
 
@@ -411,7 +577,27 @@ export default function OwnerDashboard({ session, backendUrl }) {
     .filter(o => o.status === 'pending_owner' || o.status === 'pending_customer' || o.status === 'pending_payment')
     .length;
 
-  const lowStockCount = products.filter(p => p.stock <= p.min_stock_threshold).length;
+  const sortedProducts = [...products].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  );
+
+  const filteredCatalogProducts = sortedProducts.filter(p =>
+    catalogSearchQuery.trim() === '' ||
+    p.name.toLowerCase().includes(catalogSearchQuery.trim().toLowerCase())
+  );
+
+  const lowStockProducts = sortedProducts.filter(p => p.stock <= p.min_stock_threshold);
+  const lowStockCount = lowStockProducts.length;
+
+  const unreadAlertsCount = alerts.filter(a => !a.is_read).length;
+
+  const filteredNotifications = alerts.filter(a => {
+    if (notifFilter === 'all') return true;
+    if (notifFilter === 'low_stock') return a.type === 'low_stock';
+    if (notifFilter === 'new_order') return a.type === 'new_order';
+    if (notifFilter === 'payment') return a.type === 'payment' || a.type === 'payment_success';
+    return true;
+  });
 
   // Chart configuration
   const getChartConfig = () => {
@@ -515,15 +701,28 @@ export default function OwnerDashboard({ session, backendUrl }) {
           📈 Predictive Demand
         </button>
         <button 
+          className={`sidebar-btn ${activeTab === 'notifications' ? 'active' : ''}`}
+          onClick={() => setActiveTab('notifications')}
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        >
+          <span>🔔 Notifications</span>
+          {unreadAlertsCount > 0 && (
+            <span className="unread-badge">{unreadAlertsCount}</span>
+          )}
+        </button>
+        <button 
           className={`sidebar-btn ${activeTab === 'profile' ? 'active' : ''}`}
           onClick={() => setActiveTab('profile')}
         >
           👤 Owner Profile
         </button>
         
-        {alerts.length > 0 && (
+        {unreadAlertsCount > 0 && (
           <div style={{ marginTop: 'auto', backgroundColor: 'var(--error-light)', padding: '12px', borderRadius: 'var(--radius-sm)', borderLeft: '4px solid var(--error)', fontSize: '12px', color: 'var(--error)' }}>
-            <strong>{alerts.length} Warnings pending!</strong>
+            <strong>
+              {alerts.some(a => !a.is_read && a.type === 'low_stock') ? '⚠️ ' : '🔔 '}
+              {unreadAlertsCount} Unread Alert{unreadAlertsCount > 1 ? 's' : ''} pending!
+            </strong>
           </div>
         )}
       </div>
@@ -531,13 +730,13 @@ export default function OwnerDashboard({ session, backendUrl }) {
       {/* Main Panel */}
       <div>
         {/* Alerts Banner */}
-        {alerts.map(a => (
+        {alerts.filter(a => !a.is_read).map(a => (
           <div key={a.id} className={`alert-banner ${a.type}`}>
             <span className="alert-message">
               ⚠️ {a.message}
             </span>
-            <button className="btn-close-alert" onClick={() => handleMarkAlertRead(a.id)}>
-              Dismiss
+            <button className="btn-close-alert" onClick={() => handleMarkAlertRead(a.id)} title="Close banner" style={{ fontSize: '16px', padding: '2px 8px' }}>
+              ✕
             </button>
           </div>
         ))}
@@ -554,10 +753,18 @@ export default function OwnerDashboard({ session, backendUrl }) {
             <span className="stat-value">{activeOrdersCount}</span>
             <span className="stat-desc">Awaiting review or payment</span>
           </div>
-          <div className="stat-card" style={{ borderLeft: lowStockCount > 0 ? '4px solid var(--error)' : '1px solid var(--surface-border)' }}>
-            <span className="stat-title">Low Stock Items</span>
+          <div 
+            className="stat-card stat-card-clickable" 
+            style={{ borderLeft: lowStockCount > 0 ? '4px solid var(--error)' : '1px solid var(--surface-border)' }}
+            onClick={() => setShowLowStockModal(true)}
+            title="Click to view low stock items"
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span className="stat-title">Low Stock Items</span>
+              <span style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: '700' }}>View Details ↗</span>
+            </div>
             <span className="stat-value" style={{ color: lowStockCount > 0 ? 'var(--error)' : 'inherit' }}>{lowStockCount}</span>
-            <span className="stat-desc">Below min threshold</span>
+            <span className="stat-desc">Below min quantity (click to manage)</span>
           </div>
         </div>
 
@@ -721,64 +928,189 @@ export default function OwnerDashboard({ session, backendUrl }) {
         {activeTab === 'inventory' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             <div className="card-content">
-              <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Plus size={18} /> Add New Catalog Product
-              </h3>
-              <form onSubmit={handleAddProduct} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', alignItems: 'end' }}>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Product Name</label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="Rice / Milk"
-                    value={newProdName}
-                    onChange={e => {
-                      setNewProdName(e.target.value);
-                      setSelectedProduct(null);
-                    }}
-                    required
-                  />
+              {/* Product Operation Mode Selector */}
+              <div className="mode-toggle-group">
+                <button 
+                  type="button"
+                  className={`btn-mode ${productFormMode === 'add' ? 'active' : ''}`}
+                  onClick={() => resetProductForm('add')}
+                >
+                  <Plus size={16} /> Add Product
+                </button>
+                <button 
+                  type="button"
+                  className={`btn-mode ${productFormMode === 'update' ? 'active' : ''}`}
+                  onClick={() => resetProductForm('update')}
+                >
+                  ✏️ Update Product
+                </button>
+              </div>
 
-                  {newProdName.trim() && productSuggestions.length > 0 && !selectedProduct && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        top: '100%',
-                        left: 0,
-                        right: 0,
-                        background: '#fff',
-                        border: '1px solid #ddd',
-                        borderRadius: '6px',
-                        zIndex: 1000,
-                        maxHeight: '180px',
-                        overflowY: 'auto'
+              <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                {productFormMode === 'add' ? '➕ Add New Catalog Product' : '✏️ Search & Update Existing Product'}
+              </h3>
+
+              {/* Update Product Mode: Search & Select existing product */}
+              {productFormMode === 'update' && (
+                <div className="form-group" style={{ marginBottom: '20px' }}>
+                  <label className="form-label" style={{ fontWeight: '700', color: 'var(--primary)' }}>
+                    Search Product to Update
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="Type product name e.g. Bread, Rice, Milk..."
+                      value={updateSearchQuery}
+                      onChange={e => {
+                        setUpdateSearchQuery(e.target.value);
+                        setShowUpdateSuggestions(true);
                       }}
-                    >
-                      {productSuggestions.map(product => (
-                        <div
-                          key={product.id}
-                          onClick={() => {
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (updateSuggestions.length > 0) {
+                            const product = updateSuggestions[0];
                             setSelectedProduct(product);
                             setNewProdName(product.name);
                             setNewProdUnit(product.unit);
                             setNewProdPrice(product.price);
                             setNewProdStock(product.stock);
                             setNewProdThreshold(product.min_stock_threshold);
-                          }}
-                          style={{
-                            padding: '10px 12px',
-                            cursor: 'pointer',
-                            borderBottom: '1px solid #eee'
-                          }}
-                        >
-                          {product.name}
-                        </div>
-                      ))}
+                            setUpdateSearchQuery(product.name);
+                          }
+                          setShowUpdateSuggestions(false);
+                        }
+                      }}
+                    />
+
+                    {showUpdateSuggestions && updateSearchQuery.trim().length >= 1 && updateSuggestions.length > 0 && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          background: '#fff',
+                          border: '1px solid #ddd',
+                          borderRadius: '6px',
+                          zIndex: 1000,
+                          maxHeight: '200px',
+                          overflowY: 'auto',
+                          boxShadow: 'var(--shadow-md)'
+                        }}
+                      >
+                        {updateSuggestions.map(product => (
+                          <div
+                            key={product.id}
+                            onClick={() => {
+                              setSelectedProduct(product);
+                              setNewProdName(product.name);
+                              setNewProdUnit(product.unit);
+                              setNewProdPrice(product.price);
+                              setNewProdStock(product.stock);
+                              setNewProdThreshold(product.min_stock_threshold);
+                              setUpdateSearchQuery(product.name);
+                              setShowUpdateSuggestions(false);
+                            }}
+                            style={{
+                              padding: '10px 14px',
+                              cursor: 'pointer',
+                              borderBottom: '1px solid #eee',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              fontSize: '13px'
+                            }}
+                          >
+                            <div>
+                              <strong>{product.name}</strong>
+                              <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginLeft: '8px' }}>
+                                (Stock: {product.stock} {product.unit})
+                              </span>
+                            </div>
+                            <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: '700' }}>Select ↵</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {selectedProduct && (
+                    <div style={{ marginTop: '8px', fontSize: '13px', color: 'var(--secondary)', fontWeight: '700' }}>
+                      ✔️ Selected Product: {selectedProduct.name} (ID: #{selectedProduct.id})
                     </div>
                   )}
                 </div>
-              </div>
+              )}
+
+              {/* Add Product Mode: Duplicate Warning Banner */}
+              {productFormMode === 'add' && duplicateMatchInAddMode && (
+                <div style={{ backgroundColor: 'var(--error-light)', color: 'var(--error)', padding: '10px 14px', borderRadius: 'var(--radius-sm)', marginBottom: '16px', fontSize: '13px', fontWeight: '600' }}>
+                  ⚠️ A product named "{duplicateMatchInAddMode.name}" already exists in your shop! Switch to "Update Product" mode to modify it.
+                </div>
+              )}
+
+              <form onSubmit={handleAddProduct} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', alignItems: 'end' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Product Name</label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. Rice, Milk, Bread"
+                      value={newProdName}
+                      onChange={e => setNewProdName(e.target.value)}
+                      required
+                    />
+
+                    {/* Suggestions in Add mode starting from 1st character */}
+                    {productFormMode === 'add' && newProdName.trim().length >= 1 && addModeSuggestions.length > 0 && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          background: '#fff',
+                          border: '1px solid #ddd',
+                          borderRadius: '6px',
+                          zIndex: 1000,
+                          maxHeight: '180px',
+                          overflowY: 'auto',
+                          boxShadow: 'var(--shadow-md)'
+                        }}
+                      >
+                        <div style={{ padding: '6px 12px', fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', backgroundColor: 'var(--background)' }}>
+                          EXISTING PRODUCTS IN SHOP:
+                        </div>
+                        {addModeSuggestions.map(product => (
+                          <div
+                            key={product.id}
+                            onClick={() => {
+                              resetProductForm('update');
+                              setSelectedProduct(product);
+                              setNewProdName(product.name);
+                              setNewProdUnit(product.unit);
+                              setNewProdPrice(product.price);
+                              setNewProdStock(product.stock);
+                              setNewProdThreshold(product.min_stock_threshold);
+                              setUpdateSearchQuery(product.name);
+                            }}
+                            style={{
+                              padding: '10px 12px',
+                              cursor: 'pointer',
+                              borderBottom: '1px solid #eee',
+                              fontSize: '13px'
+                            }}
+                          >
+                            {product.name} <span style={{ fontSize: '11px', color: 'var(--error)' }}>(Click to Update)</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Unit</label>
                   <select className="form-input" value={newProdUnit} onChange={e => setNewProdUnit(e.target.value)}>
@@ -788,63 +1120,90 @@ export default function OwnerDashboard({ session, backendUrl }) {
                     <option value="packet">packet</option>
                   </select>
                 </div>
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Price (₹)</label>
-                  <input type="number" className="form-input" placeholder="65" value={newProdPrice} onChange={e => setNewProdPrice(e.target.value)} required />
+                  <input type="number" className="form-input" placeholder="e.g. 65" value={newProdPrice} onChange={e => setNewProdPrice(e.target.value)} required />
                 </div>
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Initial Stock</label>
-                  <input type="number" className="form-input" placeholder="100" value={newProdStock} onChange={e => setNewProdStock(e.target.value)} required />
+                  <label className="form-label">{productFormMode === 'add' ? 'Initial Stock' : 'Current Stock'}</label>
+                  <input type="number" className="form-input" placeholder="e.g. 100" value={newProdStock} onChange={e => setNewProdStock(e.target.value)} required />
                 </div>
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Min Threshold</label>
-                  <input type="number" className="form-input" placeholder="10" value={newProdThreshold} onChange={e => setNewProdThreshold(e.target.value)} />
+                  <label className="form-label">Min Quantity</label>
+                  <input type="number" className="form-input" placeholder="e.g. 10" value={newProdThreshold} onChange={e => setNewProdThreshold(e.target.value)} />
                 </div>
+
                 <button type="submit" className="btn-primary" style={{ height: '46px' }}>
-                  {selectedProduct ? 'Update Product' : 'Add Product'}
+                  {productFormMode === 'add' ? '+ Add Product' : '💾 Update Product'}
                 </button>       
-               </form>
+              </form>
             </div>
 
             <div className="card-content">
-              <h3 style={{ fontSize: '18px' }}>🥦 Shop Inventory Catalog</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+                <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  🥦 Shop Inventory Catalog ({filteredCatalogProducts.length})
+                </h3>
+
+                {/* Catalog Search Bar */}
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="🔍 Search catalog products..."
+                  value={catalogSearchQuery}
+                  onChange={e => setCatalogSearchQuery(e.target.value)}
+                  style={{ maxWidth: '300px', padding: '8px 14px', fontSize: '13px' }}
+                />
+              </div>
+
               <div style={{ overflowX: 'auto' }}>
-                <table className="premium-table">
-                  <thead>
-                    <tr>
-                      <th>Product</th>
-                      <th>Price</th>
-                      <th>Stock Level</th>
-                      <th>Min Threshold</th>
-                      <th>Unit</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {products.map(p => (
-                      <tr key={p.id} style={{ backgroundColor: p.stock <= p.min_stock_threshold ? 'var(--error-light)' : 'inherit' }}>
-                        <td style={{ fontWeight: '700' }}>{p.name}</td>
-                        <td>₹{p.price}</td>
-                        <td>
-                          <span style={{ color: p.stock <= p.min_stock_threshold ? 'var(--error)' : 'inherit', fontWeight: '700' }}>
-                            {p.stock}
-                          </span>
-                        </td>
-                        <td>{p.min_stock_threshold}</td>
-                        <td style={{ textTransform: 'lowercase' }}>{p.unit}</td>
-                        <td>
-                        <button
-                          className="btn-close-alert"
-                          style={{ color: 'var(--error)' }}
-                          onClick={() => handleDeleteProduct(p.id, p.name)}
-                        >
-                          Delete
-                        </button>
-                      </td>
+                {filteredCatalogProducts.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                    {catalogSearchQuery.trim()
+                      ? `No products found matching "${catalogSearchQuery}".`
+                      : 'No products in catalog.'}
+                  </div>
+                ) : (
+                  <table className="premium-table">
+                    <thead>
+                      <tr>
+                        <th>Product</th>
+                        <th>Price</th>
+                        <th>Stock Level</th>
+                        <th>Min Quantity</th>
+                        <th>Unit</th>
+                        <th>Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filteredCatalogProducts.map(p => (
+                        <tr key={p.id} style={{ backgroundColor: p.stock <= p.min_stock_threshold ? 'var(--error-light)' : 'inherit' }}>
+                          <td style={{ fontWeight: '700' }}>{p.name}</td>
+                          <td>₹{p.price}</td>
+                          <td>
+                            <span style={{ color: p.stock <= p.min_stock_threshold ? 'var(--error)' : 'inherit', fontWeight: '700' }}>
+                              {p.stock}
+                            </span>
+                          </td>
+                          <td>{p.min_stock_threshold}</td>
+                          <td style={{ textTransform: 'lowercase' }}>{p.unit}</td>
+                          <td>
+                            <button
+                              className="btn-close-alert"
+                              style={{ color: 'var(--error)' }}
+                              onClick={() => handleDeleteProduct(p.id, p.name)}
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
             </div>
           </div>
@@ -859,14 +1218,74 @@ export default function OwnerDashboard({ session, backendUrl }) {
               </h3>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary)' }}>Select Product:</span>
-                <select 
-                  className="suggestions-select" 
-                  value={selectedForecastProduct}
-                  onChange={(e) => handleForecastProductChange(e.target.value)}
-                  style={{ padding: '6px 12px' }}
-                >
-                  {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
+                <div style={{ position: 'relative', width: '220px' }}>
+                  <input
+                    type="text"
+                    className="form-input"
+                    style={{ padding: '6px 12px', fontSize: '13px' }}
+                    placeholder="Search product e.g. Bread, Milk..."
+                    value={forecastSearchQuery}
+                    onChange={e => {
+                      setForecastSearchQuery(e.target.value);
+                      setShowForecastSuggestions(true);
+                    }}
+                    onFocus={() => setShowForecastSuggestions(true)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (forecastSuggestions.length > 0) {
+                          const p = forecastSuggestions[0];
+                          setSelectedForecastProduct(p.id.toString());
+                          setForecastSearchQuery(p.name);
+                          fetchForecast(p.id);
+                        }
+                        setShowForecastSuggestions(false);
+                      }
+                    }}
+                  />
+
+                  {showForecastSuggestions && forecastSearchQuery.trim().length >= 1 && forecastSuggestions.length > 0 && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: '100%',
+                        left: 0,
+                        right: 0,
+                        background: '#fff',
+                        border: '1px solid #ddd',
+                        borderRadius: '6px',
+                        zIndex: 1000,
+                        maxHeight: '180px',
+                        overflowY: 'auto',
+                        boxShadow: 'var(--shadow-md)'
+                      }}
+                    >
+                      {forecastSuggestions.map(product => (
+                        <div
+                          key={product.id}
+                          onClick={() => {
+                            setSelectedForecastProduct(product.id.toString());
+                            setForecastSearchQuery(product.name);
+                            setShowForecastSuggestions(false);
+                            fetchForecast(product.id);
+                          }}
+                          style={{
+                            padding: '8px 12px',
+                            cursor: 'pointer',
+                            borderBottom: '1px solid #eee',
+                            fontSize: '13px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <strong>{product.name}</strong>
+                          <span style={{ fontSize: '11px', color: 'var(--primary)', fontWeight: '700' }}>Select ↵</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <select
                   className="suggestions-select"
                   value={forecastPeriod}
@@ -1051,7 +1470,228 @@ export default function OwnerDashboard({ session, backendUrl }) {
             </div>
           </div>
         )}
+
+        {/* Tab content 5: Notifications */}
+        {activeTab === 'notifications' && (
+          <div className="card-content">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  🔔 Shop Notifications & Alerts ({alerts.length})
+                </h3>
+                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                  {unreadAlertsCount > 0 ? `You have ${unreadAlertsCount} unread notification(s)` : 'All notifications are read'}
+                </span>
+              </div>
+
+              {unreadAlertsCount > 0 && (
+                <button className="btn-primary" style={{ padding: '8px 16px', fontSize: '12px' }} onClick={handleMarkAllAlertsRead}>
+                  ✓ Mark All as Read
+                </button>
+              )}
+            </div>
+
+            {/* Filter Pills */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+              <button 
+                className={`notif-filter-btn ${notifFilter === 'all' ? 'active' : ''}`}
+                onClick={() => setNotifFilter('all')}
+              >
+                All ({alerts.length})
+              </button>
+              <button 
+                className={`notif-filter-btn ${notifFilter === 'low_stock' ? 'active' : ''}`}
+                onClick={() => setNotifFilter('low_stock')}
+              >
+                ⚠️ Low Stock ({alerts.filter(a => a.type === 'low_stock').length})
+              </button>
+              <button 
+                className={`notif-filter-btn ${notifFilter === 'new_order' ? 'active' : ''}`}
+                onClick={() => setNotifFilter('new_order')}
+              >
+                📦 New Orders ({alerts.filter(a => a.type === 'new_order').length})
+              </button>
+              <button 
+                className={`notif-filter-btn ${notifFilter === 'payment' ? 'active' : ''}`}
+                onClick={() => setNotifFilter('payment')}
+              >
+                💳 Payments ({alerts.filter(a => a.type === 'payment' || a.type === 'payment_success').length})
+              </button>
+            </div>
+
+            {/* Notification Cards List */}
+            {filteredNotifications.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                No notifications found in this category.
+              </div>
+            ) : (
+              <div>
+                {filteredNotifications.map(a => (
+                  <div key={a.id} className={`notif-card ${a.type} ${!a.is_read ? 'unread' : ''}`}>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                      <div style={{ fontSize: '22px', marginTop: '2px' }}>
+                        {a.type === 'low_stock' ? '⚠️' : a.type === 'new_order' ? '📦' : a.type.includes('payment') ? '💳' : '⚙️'}
+                      </div>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: '700', fontSize: '14px' }}>{a.message}</span>
+                          {!a.is_read ? (
+                            <span className="badge-status cancelled" style={{ fontSize: '10px', padding: '2px 8px' }}>UNREAD</span>
+                          ) : (
+                            <span className="badge-status paid" style={{ fontSize: '10px', padding: '2px 8px' }}>READ</span>
+                          )}
+                        </div>
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          {new Date(a.created_at).toLocaleString()}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      {!a.is_read ? (
+                        <button 
+                          className="btn-primary" 
+                          style={{ padding: '6px 12px', fontSize: '12px' }}
+                          onClick={() => handleMarkAlertRead(a.id)}
+                        >
+                          Mark Read
+                        </button>
+                      ) : (
+                        <button 
+                          className="btn-logout" 
+                          style={{ padding: '6px 12px', fontSize: '12px' }}
+                          onClick={() => handleMarkAlertUnread(a.id)}
+                        >
+                          Mark Unread
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Floating Pop-up Toast Notification */}
+      {activeLowStockNotification && (
+        <div className="popup-notification-overlay">
+          <div className="popup-notification-card">
+            <div className="popup-header">
+              <div className="popup-icon">
+                {activeLowStockNotification.type === 'low_stock' ? '⚠️' : 
+                 activeLowStockNotification.type === 'new_order' ? '📦' : 
+                 activeLowStockNotification.type?.includes('payment') ? '💳' : '🔔'}
+              </div>
+              <div>
+                <strong style={{ fontSize: '14px', color: 'var(--text-primary)' }}>
+                  {activeLowStockNotification.type === 'low_stock' ? 'Low Stock Notification' :
+                   activeLowStockNotification.type === 'new_order' ? 'New Order Received' :
+                   activeLowStockNotification.type?.includes('payment') ? 'Payment Notification' : 'Shop Notification'}
+                </strong>
+                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                  {activeLowStockNotification.message || `Product stock is below minimum quantity.`}
+                </p>
+              </div>
+            </div>
+            <div className="popup-actions">
+              <button 
+                className="btn-primary" 
+                style={{ 
+                  padding: '6px 14px', 
+                  fontSize: '12px', 
+                  backgroundColor: activeLowStockNotification.type === 'low_stock' ? 'var(--error)' : 'var(--primary)' 
+                }}
+                onClick={() => handleViewNotificationAction(activeLowStockNotification)}
+              >
+                {activeLowStockNotification.type === 'low_stock' ? 'View Details' :
+                 activeLowStockNotification.type === 'new_order' ? 'View Orders' :
+                 activeLowStockNotification.type?.includes('payment') ? 'View Orders' : 'View Notifications'}
+              </button>
+              <button 
+                className="btn-logout" 
+                style={{ padding: '6px 14px', fontSize: '12px' }}
+                onClick={() => handleDismissNotification(activeLowStockNotification.id)}
+                title="Cancel popup"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Low Stock Details Modal */}
+      {showLowStockModal && (
+        <div className="modal-backdrop" onClick={() => setShowLowStockModal(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', width: '92%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--error)' }}>
+                ⚠️ Low Stock Items Details ({lowStockProducts.length})
+              </h3>
+              <button className="btn-close-modal" onClick={() => setShowLowStockModal(false)}>✕</button>
+            </div>
+
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+              The following products are currently at or below their minimum stock quantity. Enter a quantity and click Restock to update stock in real-time.
+            </p>
+
+            {lowStockProducts.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '36px', color: 'var(--secondary)', backgroundColor: 'var(--secondary-light)', borderRadius: 'var(--radius-sm)' }}>
+                ✔️ All products in your shop are currently above their minimum stock quantity!
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="premium-table">
+                  <thead>
+                    <tr>
+                      <th>Product Name</th>
+                      <th>Current Stock</th>
+                      <th>Min Quantity</th>
+                      <th>Price</th>
+                      <th>Quick Restock</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lowStockProducts.map(p => (
+                      <tr key={p.id} style={{ backgroundColor: 'var(--error-light)' }}>
+                        <td style={{ fontWeight: '700' }}>{p.name}</td>
+                        <td>
+                          <span style={{ color: 'var(--error)', fontWeight: '800', fontSize: '14px' }}>
+                            {p.stock} {p.unit}
+                          </span>
+                        </td>
+                        <td>{p.min_stock_threshold} {p.unit}</td>
+                        <td>₹{p.price}</td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <input 
+                              type="number" 
+                              className="form-input" 
+                              style={{ width: '90px', padding: '6px 10px', fontSize: '13px' }}
+                              placeholder="Add qty"
+                              value={restockQtyMap[p.id] || ''}
+                              onChange={(e) => setRestockQtyMap({ ...restockQtyMap, [p.id]: e.target.value })}
+                            />
+                            <button 
+                              className="btn-primary" 
+                              style={{ padding: '6px 12px', fontSize: '12px' }}
+                              onClick={() => handleQuickRestock(p, restockQtyMap[p.id])}
+                            >
+                              + Restock
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

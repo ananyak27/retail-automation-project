@@ -25,7 +25,7 @@ def get_alerts(shop_id: int, current_user: User = Depends(get_current_user), db:
 @router.put("/{alert_id}/read", response_model=AlertResponse)
 def mark_alert_as_read(alert_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    Marks a low-stock or payment alert as read.
+    Marks an alert as read.
     """
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="Only shop owners can modify alerts.")
@@ -42,3 +42,42 @@ def mark_alert_as_read(alert_id: int, current_user: User = Depends(get_current_u
     db.commit()
     db.refresh(alert)
     return alert
+
+@router.put("/{alert_id}/unread", response_model=AlertResponse)
+def mark_alert_as_unread(alert_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Marks an alert as unread.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="Only shop owners can modify alerts.")
+        
+    alert = db.query(Alert).filter(Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+        
+    shop = db.query(Shop).filter(Shop.id == alert.shop_id, Shop.owner_id == current_user.id).first()
+    if not shop:
+        raise HTTPException(status_code=403, detail="You do not own the shop this alert belongs to.")
+        
+    alert.is_read = False
+    db.commit()
+    db.refresh(alert)
+    return alert
+
+@router.put("/mark-all-read/shop/{shop_id}")
+def mark_all_alerts_read(shop_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Marks all alerts for a shop as read.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="Only shop owners can modify alerts.")
+        
+    shop = db.query(Shop).filter(Shop.id == shop_id, Shop.owner_id == current_user.id).first()
+    if not shop:
+        raise HTTPException(status_code=403, detail="You do not own this shop.")
+        
+    unread_alerts = db.query(Alert).filter(Alert.shop_id == shop_id, Alert.is_read == False).all()
+    for alert in unread_alerts:
+        alert.is_read = True
+    db.commit()
+    return {"message": "All notifications marked as read.", "count": len(unread_alerts)}

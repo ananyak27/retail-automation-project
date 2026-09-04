@@ -659,3 +659,223 @@ button, input, select, textarea {
   background-color: var(--error-light);
   color: var(--error);
 }
+
+/* Modal backdrop and card styling */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modal-card {
+  background-color: var(--surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--surface-border);
+  box-shadow: var(--shadow-lg);
+  padding: 24px;
+  max-height: 85vh;
+  overflow-y: auto;
+  animation: slideUp 0.2s ease-out;
+}
+
+.btn-close-modal {
+  background: none;
+  border: none;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.btn-close-modal:hover {
+  background-color: var(--background);
+  color: var(--text-primary);
+}
+
+/* Floating Pop-up Toast Notification */
+.popup-notification-overlay {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 1100;
+  max-width: 420px;
+  width: calc(100% - 48px);
+  animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.popup-notification-card {
+  background-color: var(--surface);
+  border-left: 5px solid var(--error);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  padding: 16px;
+  border-top: 1px solid var(--surface-border);
+  border-right: 1px solid var(--surface-border);
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.popup-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.popup-icon {
+  font-size: 20px;
+}
+
+.popup-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.stat-card-clickable {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stat-card-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Product Mode Toggle Group */
+.mode-toggle-group {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.btn-mode {
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--surface-border);
+  background-color: var(--background);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-mode:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.btn-mode.active {
+  background-color: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+/* Sidebar Unread Badge */
+.unread-badge {
+  background-color: var(--error);
+  color: white;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 99px;
+  margin-left: auto;
+}
+
+/* Notifications Section UI */
+.notif-card {
+  background-color: var(--surface);
+  border: 1.5px solid var(--surface-border);
+  border-radius: var(--radius-sm);
+  padding: 16px;
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  transition: var(--transition);
+}
+
+.notif-card.unread {
+  border-left: 5px solid var(--primary);
+  background-color: var(--primary-light);
+}
+
+.notif-card.low_stock.unread {
+  border-left: 5px solid var(--error);
+  background-color: var(--error-light);
+}
+
+.notif-card.new_order.unread {
+  border-left: 5px solid var(--accent);
+  background-color: var(--accent-light);
+}
+
+.notif-card.payment.unread {
+  border-left: 5px solid var(--secondary);
+  background-color: var(--secondary-light);
+}
+
+.notif-filter-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--surface-border);
+  background-color: var(--background);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.notif-filter-btn.active {
+  background-color: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+

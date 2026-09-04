@@ -51,7 +51,7 @@ def extract_entities(text: str) -> list:
     for line in lines:
         # 1. Regex parse: Extract quantity, unit and item
         # Matches formats: '2.5kg rice', '2.5 kg rice', '2 rice', '2 packets rice'
-        pattern = r"^\s*([\d\./]+)\s*(" + "|".join(units_list) + r")?\s*(.*)$"
+        pattern = r"^\s*([\d./]+)\s*(" + "|".join(units_list) + r")?\s*(.*)$"
         match = re.match(pattern, line, re.IGNORECASE)
         
         if match:
