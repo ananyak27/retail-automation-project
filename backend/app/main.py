@@ -25,27 +25,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from sqlalchemy import text
+from sqlalchemy import text, inspect
+from app.config import settings
 
 # Startup Database Auto-Initialization
 @app.on_event("startup")
 def startup_db_init():
-    logger.info("Initializing PostgreSQL Database Tables...")
+    logger.info(f"Initializing Database Tables using {settings.DATABASE_URL}...")
     try:
-        with engine.connect() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_name VARCHAR;"))
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_account_holder_name VARCHAR;"))
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_name VARCHAR;"))
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS account_number VARCHAR;"))
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS ifsc_code VARCHAR;"))
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS upi_id VARCHAR;"))
-            conn.execute(text("ALTER TABLE shops ADD COLUMN IF NOT EXISTS address VARCHAR;"))
-            conn.commit()
         Base.metadata.create_all(bind=engine)
+        if "sqlite" in settings.DATABASE_URL:
+            inspector = inspect(engine)
+            user_cols = [c["name"] for c in inspector.get_columns("users")]
+            with engine.connect() as conn:
+                for col_name in ["owner_name", "bank_account_holder_name", "bank_name", "account_number", "ifsc_code", "upi_id"]:
+                    if col_name not in user_cols:
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} VARCHAR;"))
+                shop_cols = [c["name"] for c in inspector.get_columns("shops")]
+                if "address" not in shop_cols:
+                    conn.execute(text("ALTER TABLE shops ADD COLUMN address VARCHAR;"))
+                conn.commit()
+        else:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_name VARCHAR;"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_account_holder_name VARCHAR;"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS bank_name VARCHAR;"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS account_number VARCHAR;"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS ifsc_code VARCHAR;"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS upi_id VARCHAR;"))
+                conn.execute(text("ALTER TABLE shops ADD COLUMN IF NOT EXISTS address VARCHAR;"))
+                conn.commit()
         logger.info("Database tables initialized successfully.")
     except Exception as e:
-        logger.critical(f"Database table initialization failed: {e}")
-        logger.critical("Please ensure your PostgreSQL server is running and database configuration in .env is correct.")
+        logger.warning(f"Database table check notice: {e}")
+
 
 # Connect Routers
 app.include_router(auth.router)

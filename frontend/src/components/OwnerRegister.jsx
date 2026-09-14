@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
-import { ShieldCheck, Phone, Key, HelpCircle, User, Store, CreditCard, ArrowLeft } from 'lucide-react';
+import { ShieldCheck, Phone, Key, HelpCircle, User, Store, CreditCard, ArrowLeft, LogIn } from 'lucide-react';
 
-export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUrl }) {
+export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUrl, initialPhoneNumber = '' }) {
   // 1. Personal Information
   const [ownerName, setOwnerName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState(initialPhoneNumber);
 
   // 2. Business Information
   const [shopName, setShopName] = useState('');
@@ -25,29 +25,47 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [infoMsg, setInfoMsg] = useState('');
+  const [suggestLogin, setSuggestLogin] = useState(false);
 
   useEffect(() => {
+    let verifier = null;
     if (!confirmationResult) {
       try {
         const container = document.getElementById('recaptcha-container-owner');
         if (container) {
-          window.recaptchaVerifierOwner = new RecaptchaVerifier(auth, container, {
+          if (window.recaptchaVerifierOwner) {
+            try { window.recaptchaVerifierOwner.clear(); } catch (e) {}
+          }
+          verifier = new RecaptchaVerifier(auth, container, {
             size: 'invisible',
             callback: () => {}
           });
+          window.recaptchaVerifierOwner = verifier;
         }
       } catch (err) {
-        console.warn("Firebase reCAPTCHA initialization failed. Local Bypass will be available.", err);
+        console.warn("Firebase reCAPTCHA initialization error:", err);
       }
     }
+
+    return () => {
+      if (window.recaptchaVerifierOwner) {
+        try { window.recaptchaVerifierOwner.clear(); } catch (e) {}
+        window.recaptchaVerifierOwner = null;
+      }
+    };
   }, [confirmationResult]);
+
+  const cleanPhone = (phone) => {
+    return phone.trim().replace(/\s+/g, '');
+  };
 
   const validateForm = () => {
     if (!ownerName.trim()) {
       setError("Please enter Owner Name.");
       return false;
     }
-    if (!phoneNumber.startsWith('+')) {
+    const formattedPhone = cleanPhone(phoneNumber);
+    if (!formattedPhone.startsWith('+')) {
       setError("Phone number must include country code (e.g. +919876543210)");
       return false;
     }
@@ -82,18 +100,52 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
     e.preventDefault();
     setError(null);
     setInfoMsg('');
+    setSuggestLogin(false);
 
     if (!validateForm()) return;
 
     setLoading(true);
+    const formattedPhone = cleanPhone(phoneNumber);
+
     try {
+      // PRE-OTP ACCOUNT EXISTENCE CHECK BEFORE SENDING OTP
+      const checkRes = await fetch(`${backendUrl}/api/auth/check-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: formattedPhone, name: ownerName })
+      });
+
+      if (checkRes.ok) {
+        const accountData = await checkRes.json();
+        if (accountData.exists) {
+          setLoading(false);
+          if (accountData.role === 'customer') {
+            setError("An account with this name and phone number already exists as a customer. Please use the customer login.");
+            return;
+          } else {
+            setError("An account with this name and phone number already exists. Please log in.");
+            setSuggestLogin(true);
+            return;
+          }
+        }
+      }
+
       const appVerifier = window.recaptchaVerifierOwner;
-      const confirmation = await signInWithPhoneNumber(auth, phoneNumber, appVerifier);
+      if (!appVerifier) {
+        throw new Error("reCAPTCHA verifier not initialized. Please refresh the page.");
+      }
+      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
       setConfirmationResult(confirmation);
-      setInfoMsg("OTP sent successfully to " + phoneNumber);
+      setInfoMsg(`OTP sent successfully to ${formattedPhone}. Enter the OTP sent to your phone.`);
     } catch (err) {
       console.error("Firebase SMS failed.", err);
-      setError("Firebase SMS limit/quota exceeded or unconfigured. Please use the 'Developer Registration Bypass' below.");
+      if (err.code === 'auth/invalid-phone-number') {
+        setError("Invalid phone number format. Please check the country code and number.");
+      } else if (err.code === 'auth/too-many-requests' || err.code === 'auth/quota-exceeded') {
+        setError("Firebase SMS limit/quota exceeded. Please use 'Developer Registration Bypass (Free)' below.");
+      } else {
+        setError(err.message || "Firebase SMS limit/quota exceeded or unconfigured. Please use 'Developer Registration Bypass' below.");
+      }
     } finally {
       setLoading(false);
     }
@@ -102,6 +154,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
   const handleVerifyOtpAndRegister = async (e) => {
     e.preventDefault();
     setError(null);
+    setInfoMsg('');
     setLoading(true);
 
     try {
@@ -109,27 +162,58 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
       const user = result.user;
       const idToken = await user.getIdToken();
 
-      await submitOwnerRegistration(idToken);
+      const formattedPhone = cleanPhone(phoneNumber);
+      await submitOwnerRegistration(idToken, formattedPhone);
     } catch (err) {
       console.error(err);
-      setError(err.message || "Invalid OTP code or registration failed. Please try again.");
+      if (err.code === 'auth/invalid-verification-code') {
+        setError("Invalid OTP code. Please check and try again.");
+      } else if (err.code === 'auth/code-expired') {
+        setError("OTP code has expired. Please click 'Change Phone Number' to request a new OTP.");
+      } else {
+        setError(err.message || "Invalid OTP code or registration failed. Please try again.");
+      }
       setLoading(false);
     }
   };
 
   const handleBypassRegistration = async () => {
     setError(null);
+    setInfoMsg('');
+    setSuggestLogin(false);
+
     if (!validateForm()) return;
 
     setLoading(true);
-    const testPhone = phoneNumber.trim() || '+919999988888';
-    const mockToken = "mock_token_" + testPhone;
+    const formattedPhone = cleanPhone(phoneNumber);
 
     try {
-      await submitOwnerRegistration(mockToken, testPhone);
+      // Pre-check for bypass as well
+      const checkRes = await fetch(`${backendUrl}/api/auth/check-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: formattedPhone, name: ownerName })
+      });
+
+      if (checkRes.ok) {
+        const accountData = await checkRes.json();
+        if (accountData.exists) {
+          setLoading(false);
+          if (accountData.role === 'customer') {
+            setError("An account with this name and phone number already exists as a customer. Please use the customer login.");
+            return;
+          } else {
+            setError("An account with this name and phone number already exists. Please log in.");
+            setSuggestLogin(true);
+            return;
+          }
+        }
+      }
+
+      const mockToken = "mock_token_" + formattedPhone;
+      await submitOwnerRegistration(mockToken, formattedPhone);
     } catch (err) {
       console.error(err);
-      setError(err.message || "Failed to connect to backend server. Is FastAPI running on port 8000?");
       setLoading(false);
     }
   };
@@ -137,7 +221,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
   const submitOwnerRegistration = async (idToken, overridePhone = null) => {
     const payload = {
       owner_name: ownerName,
-      phone_number: overridePhone || phoneNumber,
+      phone_number: overridePhone || cleanPhone(phoneNumber),
       firebase_id_token: idToken,
       shop_name: shopName,
       shop_address: shopAddress,
@@ -148,20 +232,38 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
       upi_id: upiId || null
     };
 
-    const res = await fetch(`${backendUrl}/api/auth/register-owner`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    try {
+      const res = await fetch(`${backendUrl}/api/auth/register-owner`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
-    if (!res.ok) {
-      const detail = await res.json();
-      throw new Error(detail.detail || "Owner registration failed.");
+      if (!res.ok) {
+        const detail = await res.json();
+        const msg = detail.detail || "Owner registration failed.";
+        if (res.status === 400 || msg.includes("Account already exists")) {
+          setSuggestLogin(true);
+          throw new Error("An account with this name and phone number already exists. Please log in.");
+        }
+        throw new Error(msg);
+      }
+
+      const session = await res.json();
+      localStorage.setItem('retail_session', JSON.stringify(session));
+      onLoginSuccess(session);
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+      throw err;
     }
+  };
 
-    const session = await res.json();
-    localStorage.setItem('retail_session', JSON.stringify(session));
-    onLoginSuccess(session);
+  const resetOtpState = () => {
+    setConfirmationResult(null);
+    setOtp('');
+    setError(null);
+    setInfoMsg('');
   };
 
   return (
@@ -169,7 +271,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
       <div className="auth-card" style={{ maxWidth: '640px' }}>
         <button 
           type="button"
-          onClick={onBackToLogin}
+          onClick={() => onBackToLogin({ phoneNumber })}
           className="btn-logout"
           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginBottom: '16px', padding: '6px 12px' }}
         >
@@ -183,6 +285,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
         <h2 className="auth-title">Shop Owner Registration</h2>
         <p className="auth-subtitle">Fill in your business and bank details to set up your retail account</p>
 
+        {/* Error Display */}
         {error && (
           <div style={{
             backgroundColor: 'var(--error-light)',
@@ -194,10 +297,22 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
             borderLeft: '4px solid var(--error)',
             fontWeight: '500'
           }}>
-            {error}
+            <div>{error}</div>
+
+            {suggestLogin && (
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ marginTop: '10px', width: '100%', fontSize: '12px', padding: '8px 12px', backgroundColor: 'var(--primary)' }}
+                onClick={() => onBackToLogin({ phoneNumber })}
+              >
+                <LogIn size={14} style={{ marginRight: '6px' }} /> Go to Login
+              </button>
+            )}
           </div>
         )}
 
+        {/* Info Message Display */}
         {infoMsg && (
           <div style={{
             backgroundColor: 'var(--secondary-light)',
@@ -236,7 +351,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
                   <input
                     type="tel"
                     className="form-input"
-                    placeholder="+919876543210"
+                    placeholder="Enter phone number"
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
                     required
@@ -350,7 +465,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
         ) : (
           <form onSubmit={handleVerifyOtpAndRegister}>
             <div className="form-group">
-              <label className="form-label">Enter 6-Digit Verification Code</label>
+              <label className="form-label">Enter 6-Digit Verification Code *</label>
               <div style={{ position: 'relative' }}>
                 <Key size={18} style={{ position: 'absolute', left: '14px', top: '14px', color: 'var(--text-secondary)' }} />
                 <input
@@ -374,9 +489,9 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
               type="button"
               className="btn-logout"
               style={{ width: '100%', marginTop: '10px' }}
-              onClick={() => setConfirmationResult(null)}
+              onClick={resetOtpState}
             >
-              Change Registration Form / Phone Number
+              Change Phone Number
             </button>
           </form>
         )}

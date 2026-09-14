@@ -4,7 +4,12 @@ import ChatBot from './components/ChatBot';
 import OwnerDashboard from './components/OwnerDashboard';
 import { ShoppingCart } from 'lucide-react';
 
-const BACKEND_URL = "http://127.0.0.1:8000";
+const getBackendUrl = () => {
+  const hostname = window.location.hostname || '127.0.0.1';
+  return `http://${hostname}:8000`;
+};
+
+const BACKEND_URL = getBackendUrl();
 
 export default function App() {
   const [session, setSession] = useState(null);

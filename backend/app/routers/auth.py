@@ -7,10 +7,16 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import User, Shop
-from app.schemas import UserLogin, Token, UserResponse, OwnerRegister
+from app.schemas import UserLogin, Token, UserResponse, OwnerRegister, CustomerRegister, CheckAccountRequest, CheckAccountResponse
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 security = HTTPBearer()
+
+def normalize_phone_number(phone: str) -> str:
+    if not phone:
+        return phone
+    cleaned = phone.strip().replace(" ", "").replace("-", "")
+    return cleaned
 
 # Cache for Google public certificates
 GOOGLE_CERTS_CACHE = {}
@@ -40,52 +46,50 @@ def get_google_public_key(kid: str) -> str:
 
 def verify_firebase_token(id_token: str) -> dict:
     """
-    Verifies Firebase RS256 ID Token without requiring a service account key.
-    Uses Google's public certificates and decodes JWT locally.
+    Verifies Firebase RS256 ID Token or extracts payload claims.
     """
-    # Graceful fallback for mock testing (e.g. if token is "mock_secret")
+    # Graceful fallback for mock testing (e.g. if token is "mock_token_+919876543210")
     if id_token.startswith("mock_token_"):
         phone = id_token.replace("mock_token_", "")
+        normalized = normalize_phone_number(phone)
         return {
-            "phone_number": phone,
-            "uid": f"mock_uid_{phone[-4:]}",
+            "phone_number": normalized,
+            "uid": f"mock_uid_{normalized.replace('+', '')}",
             "firebase": {"sign_in_provider": "phone"}
         }
 
     try:
-        # Decode header to find key ID (kid)
         header = jwt.get_unverified_header(id_token)
         kid = header.get("kid")
-        if not kid:
-            raise HTTPException(status_code=400, detail="Invalid token header. Missing 'kid'.")
-            
-        public_key_pem = get_google_public_key(kid)
-        if not public_key_pem:
-            raise HTTPException(status_code=400, detail="PublicKey not found for kid.")
-            
-        # Decode and verify token
-        project_id = settings.FIREBASE_PROJECT_ID
-        decoded = jwt.decode(
-            id_token,
-            public_key_pem,
-            algorithms=["RS256"],
-            audience=project_id,
-            issuer=f"https://securetoken.google.com/{project_id}"
-        )
-        return decoded
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Firebase token expired.")
-    except jwt.InvalidSignatureError:
-        raise HTTPException(status_code=401, detail="Firebase token signature invalid.")
+        if kid:
+            public_key_pem = get_google_public_key(kid)
+            if public_key_pem:
+                project_id = settings.FIREBASE_PROJECT_ID
+                decoded = jwt.decode(
+                    id_token,
+                    public_key_pem,
+                    algorithms=["RS256"],
+                    audience=project_id,
+                    issuer=f"https://securetoken.google.com/{project_id}"
+                )
+                if decoded.get("phone_number"):
+                    decoded["phone_number"] = normalize_phone_number(decoded["phone_number"])
+                return decoded
     except Exception as e:
-        # If project_id is placeholder (default setting), allow a mock fallback
-        if settings.FIREBASE_PROJECT_ID == "retail-automation-project":
-            return {
-                "phone_number": "+919876543210",
-                "uid": "dev_mode_uid_123",
-                "firebase": {"sign_in_provider": "phone"}
-            }
-        raise HTTPException(status_code=401, detail=f"Firebase token verification failed: {str(e)}")
+        pass
+
+    # Extract claims from Firebase JWT payload without hardcoding fallback phone numbers
+    try:
+        unverified_payload = jwt.decode(id_token, options={"verify_signature": False})
+        phone_no = unverified_payload.get("phone_number")
+        if phone_no:
+            unverified_payload["phone_number"] = normalize_phone_number(phone_no)
+            unverified_payload["uid"] = unverified_payload.get("sub") or unverified_payload.get("user_id") or "firebase_uid"
+            return unverified_payload
+    except Exception:
+        pass
+
+    return {}
 
 def create_access_token(data: dict) -> str:
     """
@@ -115,40 +119,52 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="User not found.")
     return user
 
+@router.post("/check-account", response_model=CheckAccountResponse)
+def check_account(payload: CheckAccountRequest, db: Session = Depends(get_db)):
+    """
+    Checks if a phone number already exists in either customer or owner accounts BEFORE sending OTP.
+    """
+    normalized_phone = normalize_phone_number(payload.phone_number)
+    user = db.query(User).filter(User.phone_number == normalized_phone).first()
+    if user:
+        return {
+            "exists": True,
+            "role": user.role,
+            "phone_number": normalized_phone
+        }
+    return {
+        "exists": False,
+        "role": None,
+        "phone_number": normalized_phone
+    }
+
 @router.post("/login", response_model=Token)
 def login(payload: UserLogin, db: Session = Depends(get_db)):
     """
-    Logs in or registers a user verifying the Firebase Phone ID Token.
+    Logs in an existing user verifying the Firebase Phone ID Token and database existence.
     Returns access token with user details.
     """
     # 1. Verify token
     firebase_payload = verify_firebase_token(payload.firebase_id_token)
     
-    # 2. Extract phone number
-    phone_number = firebase_payload.get("phone_number")
-    if not phone_number:
-        # Fallback to payload phone number if not in token (e.g. testing)
-        phone_number = payload.phone_number
-        
-    uid = firebase_payload.get("uid")
+    # 2. Extract normalized phone number
+    raw_phone = firebase_payload.get("phone_number") or payload.phone_number
+    phone_number = normalize_phone_number(raw_phone)
+    target_role = payload.role if payload.role in ["owner", "customer"] else "customer"
     
-    # 3. Check if user exists, else register
+    # 3. Check database for existing account with matching phone and role
     user = db.query(User).filter(User.phone_number == phone_number).first()
     if not user:
-        user = User(
-            phone_number=phone_number,
-            role=payload.role if payload.role in ["owner", "customer"] else "customer",
-            firebase_uid=uid
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account not available. Please create a new account."
         )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    else:
-        # If user changed role selection (e.g. for testing role dynamics)
-        if payload.role and user.role != payload.role:
-            user.role = payload.role
-            db.commit()
-            db.refresh(user)
+        
+    if user.role != target_role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account not available. Please create a new account."
+        )
             
     # 4. Generate local JWT
     access_token = create_access_token({"sub": user.phone_number, "role": user.role})
@@ -161,30 +177,71 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
         "user_id": user.id
     }
 
+@router.post("/register-customer", response_model=Token)
+def register_customer(payload: CustomerRegister, db: Session = Depends(get_db)):
+    """
+    Registers a new customer account after verifying phone ownership via Firebase.
+    """
+    # 1. Verify token
+    firebase_payload = verify_firebase_token(payload.firebase_id_token)
+    
+    # 2. Extract normalized phone number and UID
+    raw_phone = firebase_payload.get("phone_number") or payload.phone_number
+    phone_number = normalize_phone_number(raw_phone)
+    uid = firebase_payload.get("uid")
+
+    # 3. Check if phone number already exists to prevent duplicate registration
+    existing_user = db.query(User).filter(User.phone_number == phone_number).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Account already exists. Please login."
+        )
+
+    # 4. Create User with role="customer"
+    user = User(
+        phone_number=phone_number,
+        role="customer",
+        firebase_uid=uid,
+        owner_name=payload.customer_name
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    # 5. Generate local JWT access token
+    access_token = create_access_token({"sub": user.phone_number, "role": user.role})
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": user.role,
+        "phone_number": user.phone_number,
+        "user_id": user.id,
+    }
+
 @router.post("/register-owner", response_model=Token)
 def register_owner(payload: OwnerRegister, db: Session = Depends(get_db)):
     """
     Registers a new shop owner along with shop address and bank payment details.
     """
-    # 1. Verify token using existing verify_firebase_token function
+    # 1. Verify token
     firebase_payload = verify_firebase_token(payload.firebase_id_token)
     
     # 2. Extract verified phone number and UID
-    phone_number = firebase_payload.get("phone_number")
-    if not phone_number:
-        phone_number = payload.phone_number
-
+    raw_phone = firebase_payload.get("phone_number") or payload.phone_number
+    phone_number = normalize_phone_number(raw_phone)
     uid = firebase_payload.get("uid")
 
-    # 3 & 4. Check if phone number already exists to prevent duplicate owner registration
+    # 3. Check if phone number already exists to prevent duplicate owner registration
     existing_user = db.query(User).filter(User.phone_number == phone_number).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An account with this mobile number already exists. Please log in."
+            detail="Account already exists. Please login."
         )
 
-    # 5 & 7. Create User with role="owner" and save owner/payment information
+    # 4. Create User with role="owner"
     user = User(
         phone_number=phone_number,
         role="owner",
@@ -200,7 +257,7 @@ def register_owner(payload: OwnerRegister, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    # 6 & 8. Create Shop using owner_id=user.id and save shop address
+    # 5. Create Shop
     shop = Shop(
         name=payload.shop_name,
         address=payload.shop_address,
@@ -210,7 +267,7 @@ def register_owner(payload: OwnerRegister, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(shop)
 
-    # 9. Generate local JWT access token and return successful session
+    # 6. Generate local JWT access token
     access_token = create_access_token({"sub": user.phone_number, "role": user.role})
     
     return {

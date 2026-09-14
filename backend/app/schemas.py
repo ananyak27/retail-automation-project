@@ -19,6 +19,20 @@ class UserLogin(BaseModel):
     firebase_id_token: str
     role: Optional[str] = "customer"  # "owner" or "customer"
 
+class CustomerRegister(BaseModel):
+    phone_number: str
+    firebase_id_token: str
+    customer_name: Optional[str] = None
+
+class CheckAccountRequest(BaseModel):
+    phone_number: str
+    name: Optional[str] = None
+
+class CheckAccountResponse(BaseModel):
+    exists: bool
+    role: Optional[str] = None
+    phone_number: str
+
 class OwnerRegister(BaseModel):
     owner_name: str
     phone_number: str
