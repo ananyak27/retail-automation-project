@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/orders", tags=["orders"])
 
 def serialize_order(order: Order, db: Session) -> dict:
     """
-    Helper function to serialize an order with product names populated.
+    Helper function to serialize an order with product names populated and shop-specific order number.
     """
     items_data = []
     for item in order.items:
@@ -30,17 +30,34 @@ def serialize_order(order: Order, db: Session) -> dict:
             "price_at_order": item.price_at_order
         })
         
+    cust = db.query(User).filter(User.id == order.customer_id).first()
+    cust_name = (cust.owner_name or cust.phone_number) if cust else f"Customer #{order.customer_id}"
+    cust_phone = cust.phone_number if cust else "N/A"
+
+    created_at_str = order.created_at.isoformat() + "Z" if order.created_at else None
+    updated_at_str = order.updated_at.isoformat() + "Z" if order.updated_at else None
+    paid_at_str = order.paid_at.isoformat() + "Z" if getattr(order, 'paid_at', None) else None
+    
+    order_num = getattr(order, 'shop_order_number', None) or order.id
+
     return {
         "id": order.id,
+        "order_number": order_num,
         "customer_id": order.customer_id,
+        "customer_name": cust_name,
+        "customer_phone": cust_phone,
         "shop_id": order.shop_id,
         "status": order.status,
+        "payment_status": getattr(order, 'payment_status', 'pending') or 'pending',
         "total_amount": order.total_amount,
         "notes": order.notes,
         "payment_method": order.payment_method,
         "payment_id": order.payment_id,
-        "created_at": order.created_at.isoformat(),
-        "updated_at": order.updated_at.isoformat(),
+        "razorpay_order_id": getattr(order, 'razorpay_order_id', None),
+        "razorpay_payment_id": getattr(order, 'razorpay_payment_id', None),
+        "paid_at": paid_at_str,
+        "created_at": created_at_str,
+        "updated_at": updated_at_str,
         "items": items_data
     }
 
@@ -95,7 +112,7 @@ async def create_draft_order(
     db: Session = Depends(get_db)
 ):
     """
-    Step 7: Creates a draft order in the database and alerts the owner.
+    Step 7: Creates a draft order in the database with shop-specific sequential order number and alerts the owner.
     """
     # 1. Calculate initial total amount
     total = 0.0
@@ -117,11 +134,22 @@ async def create_draft_order(
             price_at_order=price
         ))
 
-    # 2. Save Order (status: pending_owner as draft goes to owner review)
+    # 2. Increment shop's order counter atomically with for_update locking
+    shop = db.query(Shop).filter(Shop.id == payload.shop_id).with_for_update().first()
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found.")
+
+    current_last = getattr(shop, 'last_order_number', 0) or 0
+    next_shop_num = current_last + 1
+    shop.last_order_number = next_shop_num
+
+    # 3. Save Order with shop_order_number
     order = Order(
         customer_id=current_user.id,
         shop_id=payload.shop_id,
-        status="pending_owner",  # Draft created, goes to owner to review
+        shop_order_number=next_shop_num,
+        status="pending_payment",
+        payment_status="pending",
         total_amount=total,
         notes=payload.notes,
         items=order_items
@@ -131,27 +159,33 @@ async def create_draft_order(
     db.commit()
     db.refresh(order)
     
-    # 3. Create database Alert for owner
-    shop = db.query(Shop).filter(Shop.id == payload.shop_id).first()
-    if shop:
-        alert = Alert(
-            shop_id=shop.id,
-            type="new_order",
-            message=f"New order #{order.id} received from customer phone {current_user.phone_number}."
-        )
-        db.add(alert)
-        db.commit()
-        
-        # 4. Notify Owner in real-time via WebSocket
-        ws_msg = {
-            "type": "new_order",
-            "order_id": order.id,
-            "message": alert.message,
-            "shop_id": shop.id
-        }
-        await manager.send_personal_message(ws_msg, shop.owner_id)
-        
-    return serialize_order(order, db)
+    serialized = serialize_order(order, db)
+
+    # 4. Create database Alert for owner
+    cust_display_name = current_user.owner_name or current_user.phone_number
+    display_num = order.shop_order_number or order.id
+    alert = Alert(
+        shop_id=shop.id,
+        type="new_order",
+        message=f"New Order #{display_num} received from {cust_display_name} ({current_user.phone_number}). Total: ₹{order.total_amount:.2f}."
+    )
+    db.add(alert)
+    db.commit()
+    
+    # 5. Notify Owner in real-time via WebSocket with COMPLETE order details
+    ws_msg = {
+        "type": "new_order",
+        "order_id": order.id,
+        "order_number": display_num,
+        "message": alert.message,
+        "shop_id": shop.id,
+        "customer_name": cust_display_name,
+        "customer_phone": current_user.phone_number,
+        "order_details": serialized
+    }
+    await manager.send_personal_message(ws_msg, shop.owner_id)
+    
+    return serialized
 
 @router.put("/{order_id}/review")
 async def owner_review_order(
@@ -267,3 +301,73 @@ def get_order_details(order_id: int, current_user: User = Depends(get_current_us
             raise HTTPException(status_code=403, detail="This is not your order.")
             
     return serialize_order(order, db)
+
+@router.put("/{order_id}/reject")
+async def reject_order(order_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Owner rejects an incoming order.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="Only shop owners can reject orders.")
+        
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+        
+    shop = db.query(Shop).filter(Shop.id == order.shop_id, Shop.owner_id == current_user.id).first()
+    if not shop:
+        raise HTTPException(status_code=403, detail="You do not own the shop for this order.")
+        
+    if order.status == "paid" or order.payment_status == "paid":
+        raise HTTPException(status_code=400, detail="Cannot reject an order that has already been paid.")
+        
+    order.status = "rejected"
+    order.payment_status = "failed"
+    db.commit()
+    db.refresh(order)
+    
+    # Notify customer via WebSocket
+    ws_msg = {
+        "type": "order_rejected",
+        "order_id": order.id,
+        "message": f"Your order #{order.id} was declined/rejected by the shop owner.",
+        "status": "rejected"
+    }
+    await manager.send_personal_message(ws_msg, order.customer_id)
+    
+    return serialize_order(order, db)
+
+@router.delete("/{order_id}")
+async def delete_order(order_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Owner deletes an order and its order items safely from the database.
+    """
+    if current_user.role != "owner":
+        raise HTTPException(status_code=403, detail="Only shop owners can delete orders.")
+
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    shop = db.query(Shop).filter(Shop.id == order.shop_id, Shop.owner_id == current_user.id).first()
+    if not shop:
+        raise HTTPException(status_code=403, detail="You do not own the shop for this order.")
+
+    customer_id = order.customer_id
+    db.delete(order)
+    db.commit()
+
+    ws_msg = {
+        "type": "order_deleted",
+        "order_id": order_id,
+        "message": f"Order #{order_id} was deleted by the shop owner."
+    }
+    await manager.send_personal_message(ws_msg, customer_id)
+    await manager.send_personal_message(ws_msg, current_user.id)
+
+    return {
+        "status": "success",
+        "message": f"Order #{order_id} deleted successfully.",
+        "order_id": order_id
+    }
+

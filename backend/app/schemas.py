@@ -8,6 +8,7 @@ class Token(BaseModel):
     token_type: str
     role: str
     phone_number: str
+    user_id: Optional[int] = None
 
 class TokenData(BaseModel):
     phone_number: Optional[str] = None
@@ -136,12 +137,18 @@ class OrderUpdate(BaseModel):
 class OrderResponse(BaseModel):
     id: int
     customer_id: int
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
     shop_id: int
     status: str
+    payment_status: Optional[str] = "pending"
     total_amount: float
     notes: Optional[str] = None
     payment_method: Optional[str] = None
     payment_id: Optional[str] = None
+    razorpay_order_id: Optional[str] = None
+    razorpay_payment_id: Optional[str] = None
+    paid_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     items: List[OrderItemResponse]
@@ -172,3 +179,22 @@ class ForecastResponse(BaseModel):
     product_id: int
     product_name: str
     forecast: List[ForecastItem]
+
+# Chat Message Schemas
+class ChatMessageCreate(BaseModel):
+    shop_id: int
+    sender_role: str  # "customer", "bot", or "owner"
+    message: str
+    customer_id: Optional[int] = None
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    shop_id: int
+    customer_id: int
+    sender_role: str
+    message: str
+    created_at: str
+
+    class Config:
+        from_attributes = True
+

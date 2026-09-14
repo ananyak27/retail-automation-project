@@ -30,6 +30,7 @@ class Shop(Base):
     name = Column(String, nullable=False)
     address = Column(String, nullable=True)
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    last_order_number = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships
@@ -64,14 +65,26 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     shop_id = Column(Integer, ForeignKey("shops.id", ondelete="CASCADE"), nullable=False)
-    # Statuses: draft, pending_owner, pending_customer, paid, cancelled
-    status = Column(String, default="draft", nullable=False, index=True)
+    shop_order_number = Column(Integer, nullable=True, index=True)
+    # Order Statuses: pending_owner, pending_customer, confirmed, paid, cancelled, rejected
+    status = Column(String, default="pending_owner", nullable=False, index=True)
+    # Payment Statuses: pending, cash_pending, online_pending, paid, failed
+    payment_status = Column(String, default="pending", nullable=False, index=True)
     total_amount = Column(Float, default=0.0, nullable=False)
     notes = Column(String, nullable=True)
     payment_method = Column(String, nullable=True)  # "cash" or "razorpay"
-    payment_id = Column(String, nullable=True)  # Razorpay Payment ID or Transaction Reference
+    payment_id = Column(String, nullable=True)  # Legacy payment ID or transaction reference
+    razorpay_order_id = Column(String, nullable=True)
+    razorpay_payment_id = Column(String, nullable=True)
+    razorpay_signature = Column(String, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    from sqlalchemy import UniqueConstraint
+    __table_args__ = (
+        UniqueConstraint('shop_id', 'shop_order_number', name='_shop_order_number_uc'),
+    )
 
     # Relationships
     customer = relationship("User", back_populates="orders")
@@ -119,3 +132,19 @@ class Alert(Base):
 
     # Relationships
     shop = relationship("Shop", back_populates="alerts")
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    shop_id = Column(Integer, ForeignKey("shops.id", ondelete="CASCADE"), nullable=False, index=True)
+    customer_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    sender_role = Column(String, nullable=False)  # "customer", "bot", or "owner"
+    message = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+
+    # Relationships
+    shop = relationship("Shop")
+    customer = relationship("User")
+

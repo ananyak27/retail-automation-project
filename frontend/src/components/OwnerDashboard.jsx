@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, Play, AlertOctagon, TrendingUp, Check, Bell, Save, Trash, RefreshCw, Layers
 } from 'lucide-react';
+import { getWebSocketUrl } from '../App';
+import { formatDateTime } from '../utils/dateTimeUtils';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -44,10 +46,11 @@ export default function OwnerDashboard({ session, backendUrl }) {
   const [newProdStock, setNewProdStock] = useState('');
   const [newProdThreshold, setNewProdThreshold] = useState('10');
   
-  // Selected order for review
+  // Selected order for review or detailed view
   const [reviewOrder, setReviewOrder] = useState(null);
   const [reviewItems, setReviewItems] = useState([]);
   const [reviewNotes, setReviewNotes] = useState('');
+  const [viewingOrderModal, setViewingOrderModal] = useState(null);
 
   // Selected product for Prophet forecasting
   const [selectedForecastProduct, setSelectedForecastProduct] = useState('');
@@ -70,48 +73,150 @@ export default function OwnerDashboard({ session, backendUrl }) {
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
   const [notifFilter, setNotifFilter] = useState('all');
 
+  const [isConnected, setIsConnected] = useState(false);
+
+  const socketRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const isMountedRef = useRef(true);
+
   // Fetch shop and profile details on load
   useEffect(() => {
     fetchMyShop();
     fetchOwnerProfile();
   }, []);
 
-  // Poll for database details when shop is loaded
+  // Fetch products automatically when switching to inventory tab
   useEffect(() => {
     if (shop) {
       fetchProducts();
-      fetchOrders();
-      fetchAlerts();
+    }
+  }, [activeTab, shop?.id]);
 
-      // Setup WebSocket for real-time dashboard alerts
-      const socket = new WebSocket(`ws://${backendUrl.replace('http://', '')}/ws/${session.user_id}`);
-      
+  // Setup robust WebSocket for real-time owner dashboard alerts
+  useEffect(() => {
+    if (!shop) return;
+
+    fetchProducts();
+    fetchOrders();
+    fetchAlerts();
+
+    const userId = session?.user_id || ownerProfile?.id;
+    if (!userId) return;
+
+    isMountedRef.current = true;
+
+    const connectWebSocket = () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+
+      if (socketRef.current) {
+        socketRef.current.onopen = null;
+        socketRef.current.onmessage = null;
+        socketRef.current.onerror = null;
+        socketRef.current.onclose = null;
+        try {
+          socketRef.current.close();
+        } catch (e) {}
+        socketRef.current = null;
+      }
+
+      const wsUrl = getWebSocketUrl(backendUrl, userId);
+      console.log(`[OwnerDashboard] Connecting WebSocket to: ${wsUrl}`);
+      const socket = new WebSocket(wsUrl);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        if (!isMountedRef.current) return;
+        console.log("[OwnerDashboard] WebSocket connected successfully.");
+        setIsConnected(true);
+      };
+
       socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        console.log("WebSocket Owner received alert:", data);
-        
-        // Refresh alert list, products, and orders automatically
-        fetchAlerts();
-        fetchOrders();
-        fetchProducts(); // Refresh stock levels
-
-        if (data.type === "low_stock") {
-          setActiveLowStockNotification({
-            id: data.alert_id || Date.now(),
-            product_name: data.product_name || "Product",
-            message: data.message,
-            stock: data.stock,
-            threshold: data.threshold
-          });
-        } else if (data.type === "stock_updated") {
-          fetchProducts();
+        if (!isMountedRef.current) return;
+        try {
+          const data = JSON.parse(event.data);
+          console.log("[OwnerDashboard] WebSocket received alert:", data);
+          
           fetchAlerts();
+          fetchOrders();
+          fetchProducts();
+
+          if (data.type === "new_order" && data.order_details) {
+            setOrders(prev => {
+              const exists = prev.some(o => o.id === data.order_details.id);
+              return exists ? prev.map(o => o.id === data.order_details.id ? data.order_details : o) : [data.order_details, ...prev];
+            });
+          }
+
+          if (data.type === "order_deleted") {
+            setOrders(prev => prev.filter(o => o.id !== data.order_id));
+            setViewingOrderModal(prev => prev?.id === data.order_id ? null : prev);
+          }
+
+
+          if (data.type === "low_stock") {
+            setActiveLowStockNotification({
+              id: data.alert_id || Date.now(),
+              product_name: data.product_name || "Product",
+              message: data.message,
+              stock: data.stock,
+              threshold: data.threshold
+            });
+          } else if (data.type === "stock_updated") {
+            fetchProducts();
+            fetchAlerts();
+          }
+        } catch (err) {
+          console.error("[OwnerDashboard] Error parsing WebSocket message:", err);
         }
       };
 
-      return () => socket.close();
-    }
-  }, [shop]);
+      socket.onerror = (error) => {
+        console.warn("[OwnerDashboard] WebSocket error:", error);
+        if (isMountedRef.current) {
+          setIsConnected(false);
+        }
+      };
+
+      socket.onclose = (event) => {
+        console.log(`[OwnerDashboard] WebSocket disconnected (code: ${event.code}).`);
+        if (isMountedRef.current) {
+          setIsConnected(false);
+          if (!reconnectTimerRef.current) {
+            reconnectTimerRef.current = setTimeout(() => {
+              reconnectTimerRef.current = null;
+              if (isMountedRef.current) {
+                console.log("[OwnerDashboard] Auto-reconnecting WebSocket...");
+                connectWebSocket();
+              }
+            }, 3000);
+          }
+        }
+      };
+    };
+
+    connectWebSocket();
+
+    return () => {
+      isMountedRef.current = false;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      if (socketRef.current) {
+        socketRef.current.onopen = null;
+        socketRef.current.onmessage = null;
+        socketRef.current.onerror = null;
+        socketRef.current.onclose = null;
+        try {
+          socketRef.current.close();
+        } catch (e) {}
+        socketRef.current = null;
+      }
+    };
+  }, [shop?.id, session?.user_id, backendUrl]);
 
   const fetchMyShop = async () => {
     try {
@@ -548,6 +653,51 @@ export default function OwnerDashboard({ session, backendUrl }) {
     }
   };
 
+  const handleRejectOrder = async (orderId) => {
+    if (!window.confirm("Are you sure you want to reject this order?")) return;
+    try {
+      const res = await fetch(`${backendUrl}/api/orders/${orderId}/reject`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      });
+      if (res.ok) {
+        fetchOrders();
+        alert("Order rejected successfully.");
+      } else {
+        alert("Failed to reject order.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error rejecting order.");
+    }
+  };
+
+  const handleDeleteOrder = async (orderId) => {
+    if (!window.confirm(`Are you sure you want to delete Order #${orderId}? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`${backendUrl}/api/orders/${orderId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      });
+      if (res.ok) {
+        setOrders(prev => prev.filter(o => o.id !== orderId));
+        if (viewingOrderModal?.id === orderId) {
+          setViewingOrderModal(null);
+        }
+        alert(`Order #${orderId} deleted successfully.`);
+      } else {
+        const data = await res.json();
+        alert(`Failed to delete order: ${data.detail || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error deleting order.");
+    }
+  };
+
+
   /// Fetch Prophet Forecast data
   const fetchForecast = async (productId, period = forecastPeriod) => {
     try {
@@ -783,46 +933,45 @@ export default function OwnerDashboard({ session, backendUrl }) {
                   <thead>
                     <tr>
                       <th>Order ID</th>
+                      <th>Customer Name</th>
                       <th>Customer Phone</th>
                       <th>Total Amount</th>
-                      <th>Status</th>
-                      <th>Payment</th>
+                      <th>Payment Method</th>
+                      <th>Payment Status</th>
+                      <th>Received Date & Time</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {orders.map(o => (
                       <tr key={o.id}>
-                        <td>#{o.id}</td>
-                        <td>{o.customer_id}</td>
-                        <td>₹{o.total_amount}</td>
-                        <td>
-                          <span className={`badge-status ${o.status}`}>{o.status}</span>
+                        <td>#{o.order_number || o.id}</td>
+                        <td style={{ fontWeight: '600' }}>{o.customer_name || 'Customer'}</td>
+                        <td>{o.customer_phone || '-'}</td>
+                        <td>₹{o.total_amount?.toFixed(2)}</td>
+                        <td style={{ textTransform: 'capitalize' }}>
+                          {o.payment_method ? o.payment_method : 'Not Selected'}
                         </td>
                         <td>
-                          {o.payment_method ? (
-                            <span style={{ fontSize: '12px', fontWeight: '600', textTransform: 'capitalize' }}>
-                              {o.payment_method}
-                            </span>
+                          {o.payment_status === 'paid' ? (
+                            <span className="badge-status paid" style={{ fontSize: '11px' }}>Paid</span>
+                          ) : o.payment_method === 'cash' ? (
+                            <span className="badge-status pending" style={{ fontSize: '11px', backgroundColor: '#fff3cd', color: '#856404' }}>Cash Pending</span>
+                          ) : o.payment_method === 'razorpay' ? (
+                            <span className="badge-status pending" style={{ fontSize: '11px', backgroundColor: '#e2e3e5', color: '#383d41' }}>Online Pending</span>
                           ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Unselected</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Pending</span>
                           )}
                         </td>
+                        <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                          {formatDateTime(o.created_at)}
+                        </td>
                         <td>
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            {o.status === 'pending_owner' && (
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            {o.payment_method === 'cash' && o.payment_status !== 'paid' && (
                               <button 
                                 className="btn-primary" 
-                                style={{ padding: '6px 12px', fontSize: '12px' }}
-                                onClick={() => initiateOrderReview(o)}
-                              >
-                                Review & Edit
-                              </button>
-                            )}
-                            {o.status === 'pending_payment' && o.payment_method === 'cash' && (
-                              <button 
-                                className="btn-primary" 
-                                style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--secondary)' }}
+                                style={{ padding: '5px 10px', fontSize: '12px', backgroundColor: 'var(--secondary)' }}
                                 onClick={() => handleConfirmCashPayment(o.id)}
                               >
                                 Confirm Cash Paid
@@ -830,13 +979,19 @@ export default function OwnerDashboard({ session, backendUrl }) {
                             )}
                             <button 
                               className="btn-logout"
-                              style={{ padding: '6px 12px', fontSize: '12px' }}
-                              onClick={() => {
-                                alert(`Order Items: \n` + o.items.map(i => `- ${i.product_name}: ${i.quantity} ${i.unit} (₹${i.price_at_order})`).join('\n'));
-                              }}
+                              style={{ padding: '5px 10px', fontSize: '12px' }}
+                              onClick={() => setViewingOrderModal(o)}
                             >
-                              View Items
+                              View Details
                             </button>
+                            <button 
+                              className="btn-logout"
+                              style={{ padding: '5px 10px', fontSize: '12px', color: 'var(--error)', borderColor: 'var(--error)' }}
+                              onClick={() => handleDeleteOrder(o.id)}
+                            >
+                              Delete Order
+                            </button>
+
                           </div>
                         </td>
                       </tr>
@@ -845,82 +1000,6 @@ export default function OwnerDashboard({ session, backendUrl }) {
                 </table>
               </div>
             )}
-          </div>
-        )}
-
-        {/* Order review page overlay */}
-        {activeTab === 'orders' && reviewOrder && (
-          <div className="card-content">
-            <h3 style={{ fontSize: '18px' }}>✍️ Review Order Draft #{reviewOrder.id}</h3>
-            <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-              Check availability. You can modify quantities, remove items, adjust prices, and add notes before sending to customer.
-            </p>
-            
-            <div style={{ overflowX: 'auto' }}>
-              <table className="premium-table">
-                <thead>
-                  <tr>
-                    <th>Product</th>
-                    <th>Quantity</th>
-                    <th>Price / Unit</th>
-                    <th>Total</th>
-                    <th>Remove</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reviewItems.map((item, idx) => (
-                    <tr key={idx}>
-                      <td>{item.product_name}</td>
-                      <td>
-                        <input 
-                          type="number" 
-                          className="form-input" 
-                          style={{ padding: '6px 10px', fontSize: '13px', width: '80px' }}
-                          value={item.quantity}
-                          onChange={(e) => handleReviewQtyChange(idx, e.target.value)}
-                        />
-                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginLeft: '6px' }}>{item.unit}</span>
-                      </td>
-                      <td>
-                        <input 
-                          type="number" 
-                          className="form-input" 
-                          style={{ padding: '6px 10px', fontSize: '13px', width: '100px' }}
-                          value={item.price_at_order}
-                          onChange={(e) => handleReviewPriceChange(idx, e.target.value)}
-                        />
-                      </td>
-                      <td>₹{(item.quantity * item.price_at_order).toFixed(2)}</td>
-                      <td>
-                        <button className="btn-close-alert" style={{ color: 'var(--error)' }} onClick={() => handleRemoveReviewItem(idx)}>
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="form-group" style={{ marginTop: '10px' }}>
-              <label className="form-label">Reviewer Notes (e.g. "Deducted rice quantity due to limited availability")</label>
-              <textarea 
-                className="form-input" 
-                rows="2"
-                style={{ resize: 'none' }}
-                value={reviewNotes}
-                onChange={(e) => setReviewNotes(e.target.value)}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-              <button className="btn-primary" onClick={handleSubmitReview} disabled={loading}>
-                {loading ? "Saving..." : "Send Updated Order to Customer"}
-              </button>
-              <button className="btn-logout" onClick={() => setReviewOrder(null)}>
-                Cancel
-              </button>
-            </div>
           </div>
         )}
 
@@ -1542,7 +1621,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
                           )}
                         </div>
                         <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                          {new Date(a.created_at).toLocaleString()}
+                          {formatDateTime(a.created_at)}
                         </span>
                       </div>
                     </div>
@@ -1689,6 +1768,101 @@ export default function OwnerDashboard({ session, backendUrl }) {
                 </table>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* Order Details Modal */}
+      {viewingOrderModal && (
+        <div className="modal-backdrop" onClick={() => setViewingOrderModal(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px', width: '92%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)' }}>
+                📦 Order Details #{viewingOrderModal.order_number || viewingOrderModal.id}
+              </h3>
+              <button className="btn-close-modal" onClick={() => setViewingOrderModal(null)}>✕</button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', backgroundColor: 'var(--background)', padding: '14px', borderRadius: 'var(--radius-sm)', marginBottom: '16px', fontSize: '13px' }}>
+              <div>
+                <strong>Customer Name:</strong> {viewingOrderModal.customer_name || 'Customer'}
+              </div>
+              <div>
+                <strong>Customer Phone:</strong> {viewingOrderModal.customer_phone || '-'}
+              </div>
+              <div>
+                <strong>Order Status:</strong> <span className={`badge-status ${viewingOrderModal.status}`}>{viewingOrderModal.status}</span>
+              </div>
+              <div>
+                <strong>Payment Status:</strong> <span style={{ fontWeight: '700', textTransform: 'capitalize' }}>{viewingOrderModal.payment_status || 'pending'} ({viewingOrderModal.payment_method || 'not selected'})</span>
+              </div>
+              <div>
+                <strong>Order Date & Time:</strong> {formatDateTime(viewingOrderModal.created_at)}
+              </div>
+              {viewingOrderModal.paid_at && (
+                <div>
+                  <strong>Paid At:</strong> {formatDateTime(viewingOrderModal.paid_at)}
+                </div>
+              )}
+            </div>
+
+            <h4 style={{ fontSize: '14px', marginBottom: '8px' }}>Itemized Order List:</h4>
+            <div style={{ overflowX: 'auto', marginBottom: '16px' }}>
+              <table className="premium-table">
+                <thead>
+                  <tr>
+                    <th>Product Name</th>
+                    <th>Quantity</th>
+                    <th>Price / Unit</th>
+                    <th>Item Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewingOrderModal.items?.map((item, idx) => (
+                    <tr key={idx}>
+                      <td style={{ fontWeight: '600' }}>{item.product_name}</td>
+                      <td>{item.quantity} {item.unit}</td>
+                      <td>₹{item.price_at_order}</td>
+                      <td>₹{(item.quantity * item.price_at_order).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', borderTop: '1px solid var(--surface-border)' }}>
+              <div style={{ fontSize: '16px', fontWeight: '800', color: 'var(--primary)' }}>
+                Total Amount: ₹{viewingOrderModal.total_amount?.toFixed(2)}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {viewingOrderModal.payment_method === 'cash' && viewingOrderModal.payment_status !== 'paid' && (
+                  <button 
+                    className="btn-primary" 
+                    style={{ padding: '8px 14px', fontSize: '12px', backgroundColor: 'var(--secondary)' }}
+                    onClick={() => {
+                      handleConfirmCashPayment(viewingOrderModal.id);
+                      setViewingOrderModal(null);
+                    }}
+                  >
+                    Confirm Cash Paid
+                  </button>
+                )}
+                <button 
+                  className="btn-logout" 
+                  style={{ padding: '8px 14px', fontSize: '12px', color: 'var(--error)', borderColor: 'var(--error)' }}
+                  onClick={() => handleDeleteOrder(viewingOrderModal.id)}
+                >
+                  Delete Order
+                </button>
+                <button 
+                  className="btn-logout" 
+                  style={{ padding: '8px 14px', fontSize: '12px' }}
+                  onClick={() => setViewingOrderModal(null)}
+                >
+                  Close
+                </button>
+
+              </div>
+            </div>
           </div>
         </div>
       )}

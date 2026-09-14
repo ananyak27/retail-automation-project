@@ -1,64 +1,184 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Image as ImageIcon, ShoppingBag, CheckCircle, XCircle, QrCode, Loader, AlertTriangle } from 'lucide-react';
+import { Send, Image as ImageIcon, ShoppingBag, Trash2, Store, Loader } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { getWebSocketUrl } from '../App';
+import { formatDateTime } from '../utils/dateTimeUtils';
 
 export default function ChatBot({ session, backendUrl }) {
   const [shops, setShops] = useState([]);
   const [selectedShop, setSelectedShop] = useState(null);
-  const [messages, setMessages] = useState([]);
+  const [shopCatalog, setShopCatalog] = useState([]);
+  const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
+  const [customerOrders, setCustomerOrders] = useState([]);
+
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   
-  // States for matching draft order review
+  // States for draft order review & payment
   const [extractedItems, setExtractedItems] = useState(null);
   const [currentOrder, setCurrentOrder] = useState(null);
   const [showPayment, setShowPayment] = useState(false);
   const [paymentDetails, setPaymentDetails] = useState(null);
-  const [ws, setWs] = useState(null);
+  const [activePaymentOrderId, setActivePaymentOrderId] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // Auto scroll chat
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading, extractedItems]);
+  const socketRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const isMountedRef = useRef(true);
+  const selectedShopRef = useRef(selectedShop);
+  const currentOrderRef = useRef(currentOrder);
 
-  // Connect WebSockets
   useEffect(() => {
-    if (session) {
-      const socket = new WebSocket(`ws://${backendUrl.replace('http://', '')}/ws/${session.phone_number.replace('+', '')}`);
-      
-      socket.onopen = () => console.log("WebSocket connected for customer client.");
-      
+    selectedShopRef.current = selectedShop;
+  }, [selectedShop]);
+
+  useEffect(() => {
+    currentOrderRef.current = currentOrder;
+  }, [currentOrder]);
+
+  const fetchCustomerOrders = async () => {
+    if (!session?.access_token) return;
+    try {
+      const res = await fetch(`${backendUrl}/api/orders/`, {
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCustomerOrders(data);
+      }
+    } catch (err) {
+      console.error("Error fetching customer orders:", err);
+    }
+  };
+
+  // Robust Customer WebSocket with auto-reconnect & single-socket enforcement
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    const connectWebSocket = () => {
+      if (!session || !session.user_id) return;
+
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+
+      if (socketRef.current) {
+        socketRef.current.onopen = null;
+        socketRef.current.onmessage = null;
+        socketRef.current.onerror = null;
+        socketRef.current.onclose = null;
+        try {
+          socketRef.current.close();
+        } catch (e) {}
+        socketRef.current = null;
+      }
+
+      const wsUrl = getWebSocketUrl(backendUrl, session.user_id);
+      console.log(`[ChatBot] Connecting WebSocket to: ${wsUrl}`);
+      const socket = new WebSocket(wsUrl);
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        if (!isMountedRef.current) return;
+        console.log("[ChatBot] WebSocket connected successfully.");
+        setIsConnected(true);
+      };
+
       socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        console.log("WebSocket message received:", data);
-        
-        if (data.type === 'order_reviewed' && currentOrder && data.order_id === currentOrder.id) {
-          // Fetch updated order details
-          fetchOrderDetails(data.order_id);
-          addBotMessage(`🔔 Shop Owner reviewed your order #${data.order_id}! Please check the updated items below and confirm payment.`);
-        }
-        
-        if (data.type === 'payment_success' && currentOrder && data.order_id === currentOrder.id) {
-          // Trigger confetti!
-          confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
-          setCurrentOrder(prev => prev ? { ...prev, status: 'paid' } : null);
-          setShowPayment(false);
-          addBotMessage(`🎉 Payment verified successfully for Order #${data.order_id}! The shop inventory has been automatically updated.`);
+        if (!isMountedRef.current) return;
+        try {
+          const data = JSON.parse(event.data);
+          console.log("[ChatBot] WebSocket message received:", data);
+          
+          if (data.type === 'order_reviewed' || data.type === 'order_rejected' || data.type === 'order_deleted') {
+            fetchCustomerOrders();
+          }
+
+          if (data.type === 'payment_success') {
+            confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+            setShowPayment(false);
+            setActivePaymentOrderId(null);
+            fetchCustomerOrders();
+          }
+        } catch (err) {
+          console.error("[ChatBot] Error parsing WebSocket message:", err);
         }
       };
 
-      setWs(socket);
-      return () => socket.close();
-    }
-  }, [session, currentOrder]);
+      socket.onerror = (error) => {
+        console.warn("[ChatBot] WebSocket error:", error);
+        if (isMountedRef.current) {
+          setIsConnected(false);
+        }
+      };
 
-  // Fetch shops on mount
+      socket.onclose = (event) => {
+        console.log(`[ChatBot] WebSocket disconnected (code: ${event.code}).`);
+        if (isMountedRef.current) {
+          setIsConnected(false);
+          if (!reconnectTimerRef.current) {
+            reconnectTimerRef.current = setTimeout(() => {
+              reconnectTimerRef.current = null;
+              if (isMountedRef.current) {
+                console.log("[ChatBot] Auto-reconnecting WebSocket...");
+                connectWebSocket();
+              }
+            }, 3000);
+          }
+        }
+      };
+    };
+
+    connectWebSocket();
+
+    return () => {
+      isMountedRef.current = false;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      if (socketRef.current) {
+        socketRef.current.onopen = null;
+        socketRef.current.onmessage = null;
+        socketRef.current.onerror = null;
+        socketRef.current.onclose = null;
+        try {
+          socketRef.current.close();
+        } catch (e) {}
+        socketRef.current = null;
+      }
+    };
+  }, [session?.user_id, backendUrl]);
+
+  // Fetch shops and order history on mount
   useEffect(() => {
     fetchShops();
+    fetchCustomerOrders();
   }, []);
+
+  const saveChatMessage = async (shopId, senderRole, text) => {
+    if (!session?.access_token || !shopId) return null;
+    try {
+      await fetch(`${backendUrl}/api/chat/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({
+          shop_id: shopId,
+          sender_role: senderRole,
+          message: text
+        })
+      });
+    } catch (err) {
+      console.error("Error saving chat message:", err);
+    }
+  };
 
   const fetchShops = async () => {
     try {
@@ -66,10 +186,14 @@ export default function ChatBot({ session, backendUrl }) {
       if (res.ok) {
         const data = await res.json();
         setShops(data);
-        if (data.length > 0) {
-          addBotMessage("👋 Hello! Please select a shop from the dropdown above to start shopping.");
-        } else {
-          addBotMessage("👋 Hello! There are no shops registered in the system yet. Please register an owner shop first.");
+        
+        // Auto-restore selected shop from localStorage after refresh
+        const savedShopId = localStorage.getItem('customer_selected_shop_id');
+        if (savedShopId && data.length > 0) {
+          const matched = data.find(s => s.id === parseInt(savedShopId));
+          if (matched) {
+            handleShopSelect(matched);
+          }
         }
       }
     } catch (err) {
@@ -77,31 +201,93 @@ export default function ChatBot({ session, backendUrl }) {
     }
   };
 
-  const fetchOrderDetails = async (orderId) => {
+  const fetchShopCatalog = async (shopId) => {
     try {
-      const res = await fetch(`${backendUrl}/api/orders/${orderId}`, {
-        headers: { 'Authorization': `Bearer ${session.access_token}` }
-      });
+      const res = await fetch(`${backendUrl}/api/products/?shop_id=${shopId}`);
       if (res.ok) {
-        const orderData = await res.json();
-        setCurrentOrder(orderData);
+        const data = await res.json();
+        setShopCatalog(data);
       }
     } catch (err) {
-      console.error(err);
+      console.error("Error fetching shop catalog:", err);
     }
-  };
-
-  const addBotMessage = (text) => {
-    setMessages(prev => [...prev, { sender: 'bot', text, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
-  };
-
-  const addUserMessage = (text) => {
-    setMessages(prev => [...prev, { sender: 'user', text, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
   };
 
   const handleShopSelect = (shop) => {
     setSelectedShop(shop);
-    addBotMessage(`🏪 You have selected "${shop.name}". You can now type your shopping list below (e.g. "2kg rice, 3 milk, 5 soap") or click the image icon to upload a photo of your shopping list.`);
+    selectedShopRef.current = shop;
+    localStorage.setItem('customer_selected_shop_id', shop.id.toString());
+    setExtractedItems(null);
+    fetchShopCatalog(shop.id);
+    fetchCustomerOrders();
+  };
+
+  const handleAddCatalogProductToOrder = (productId) => {
+    if (!productId) return;
+    const prod = shopCatalog.find(p => p.id === parseInt(productId));
+    if (!prod) return;
+
+    setExtractedItems(prev => {
+      const currentList = prev || [];
+      const existingIdx = currentList.findIndex(item => item.matched_product_id === prod.id);
+      if (existingIdx >= 0) {
+        const updated = [...currentList];
+        updated[existingIdx].quantity += 1;
+        return updated;
+      }
+      return [
+        ...currentList,
+        {
+          original_name: prod.name,
+          matched_product_id: prod.id,
+          matched_product_name: prod.name,
+          matched_product_price: prod.price,
+          quantity: 1.0,
+          unit: prod.unit,
+          recognized: true,
+          suggestions: []
+        }
+      ];
+    });
+  };
+
+  const handleItemQtyStep = (index, delta) => {
+    setExtractedItems(prev => {
+      if (!prev) return prev;
+      const updated = [...prev];
+      const newQty = Math.max(0.1, (parseFloat(updated[index].quantity) || 0) + delta);
+      updated[index].quantity = Math.round(newQty * 10) / 10;
+      return updated;
+    });
+  };
+
+  const handleItemQtyChange = (index, value) => {
+    setExtractedItems(prev => {
+      if (!prev) return prev;
+      const updated = [...prev];
+      updated[index].quantity = parseFloat(value) || 0;
+      return updated;
+    });
+  };
+
+  const handleItemSuggestionChange = (index, suggestionId) => {
+    setExtractedItems(prev => {
+      if (!prev) return prev;
+      const updated = [...prev];
+      const item = updated[index];
+      const match = item.suggestions?.find(s => s.id === parseInt(suggestionId));
+      if (match) {
+        item.matched_product_id = match.id;
+        item.matched_product_name = match.name;
+        item.matched_product_price = match.price;
+        item.recognized = true;
+      }
+      return updated;
+    });
+  };
+
+  const handleRemoveExtractedItem = (index) => {
+    setExtractedItems(prev => prev.filter((_, idx) => idx !== index));
   };
 
   const handleSendText = async (e) => {
@@ -110,7 +296,7 @@ export default function ChatBot({ session, backendUrl }) {
 
     const text = inputText;
     setInputText('');
-    addUserMessage(text);
+    saveChatMessage(selectedShop.id, 'customer', text);
     setLoading(true);
 
     try {
@@ -126,13 +312,9 @@ export default function ChatBot({ session, backendUrl }) {
       if (res.ok) {
         const data = await res.json();
         setExtractedItems(data.extracted_items);
-        addBotMessage("🤖 spaCy NLP completed! Here is the parsed shopping list. Please verify the items and make edits before confirming draft creation.");
-      } else {
-        addBotMessage("❌ Failed to parse the shopping list. Please try writing in simple terms (e.g. '2kg Rice').");
       }
     } catch (err) {
       console.error(err);
-      addBotMessage("❌ Connection error. Failed to reach parsing servers.");
     } finally {
       setLoading(false);
     }
@@ -142,7 +324,7 @@ export default function ChatBot({ session, backendUrl }) {
     const file = e.target.files[0];
     if (!file || !selectedShop) return;
 
-    addUserMessage(`📷 Uploaded shopping list image: ${file.name}`);
+    saveChatMessage(selectedShop.id, 'customer', `📷 Uploaded shopping list image: ${file.name}`);
     setLoading(true);
 
     try {
@@ -157,56 +339,22 @@ export default function ChatBot({ session, backendUrl }) {
 
       if (res.ok) {
         const data = await res.json();
-        addBotMessage(`✍️ TrOCR extracted raw text: "${data.raw_text}"`);
         setExtractedItems(data.extracted_items);
-        addBotMessage("🤖 Here are the matched products from the shop's catalog. Review, select alternatives for unrecognized items, and submit draft.");
-      } else {
-        addBotMessage("❌ Failed to run TrOCR image extraction. Please make sure the image is clear.");
       }
     } catch (err) {
       console.error(err);
-      addBotMessage("❌ Connection error. Image server could not be reached.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Edit parsed items before creating draft
-  const handleItemQtyChange = (index, value) => {
-    const updated = [...extractedItems];
-    updated[index].quantity = parseFloat(value) || 0;
-    setExtractedItems(updated);
-  };
-
-  const handleItemSuggestionChange = (index, suggestionId) => {
-    const updated = [...extractedItems];
-    const item = updated[index];
-    const match = item.suggestions.find(s => s.id === parseInt(suggestionId));
-    if (match) {
-      item.matched_product_id = match.id;
-      item.matched_product_name = match.name;
-      item.matched_product_price = match.price;
-      item.recognized = true;
-    }
-    setExtractedItems(updated);
-  };
-
-  const handleRemoveExtractedItem = (index) => {
-    setExtractedItems(prev => prev.filter((_, idx) => idx !== index));
-  };
-
-  // Create Draft Order
   const handleCreateDraftOrder = async () => {
-    setLoading(true);
+    if (!extractedItems || extractedItems.length === 0) return;
     
-    // Filter recognized items only
     const validItems = extractedItems.filter(item => item.recognized);
-    if (validItems.length === 0) {
-      addBotMessage("⚠️ You must have at least one recognized product to submit a draft order.");
-      setLoading(false);
-      return;
-    }
+    if (validItems.length === 0) return;
 
+    setLoading(true);
     try {
       const payload = {
         shop_id: selectedShop.id,
@@ -232,38 +380,40 @@ export default function ChatBot({ session, backendUrl }) {
         const orderData = await res.json();
         setCurrentOrder(orderData);
         setExtractedItems(null);
-        addBotMessage(`📝 Order Draft #${orderData.id} created successfully! Total: ₹${orderData.total_amount}. The shop owner has been notified and is reviewing item availability...`);
-      } else {
-        addBotMessage("❌ Failed to create the draft order.");
+        await fetchCustomerOrders();
       }
     } catch (err) {
       console.error(err);
-      addBotMessage("❌ Network error. Failed to save draft.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Payment integration
-  const handleInitiatePayment = async (method) => {
+  const handleInitiatePaymentForOrder = async (ord, method) => {
     setLoading(true);
     try {
-      const res = await fetch(`${backendUrl}/api/payments/initiate/${currentOrder.id}?method=${method}`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${session.access_token}` }
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setPaymentDetails(data);
-        setShowPayment(true);
-        if (method === 'cash') {
-          addBotMessage("💵 Cash payment request recorded. Please pay the owner at the counter.");
-        } else {
-          addBotMessage("📱 UPI QR Code generated. Please scan the QR code to complete your payment.");
+      if (method === 'razorpay') {
+        const res = await fetch(`${backendUrl}/api/payments/create-razorpay-order/${ord.id}`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${session.access_token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPaymentDetails(data);
+          setActivePaymentOrderId(ord.id);
+          setShowPayment(true);
         }
       } else {
-        addBotMessage("❌ Payment initiation failed.");
+        const res = await fetch(`${backendUrl}/api/payments/initiate/${ord.id}?method=${method}`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${session.access_token}` }
+        });
+
+        if (res.ok) {
+          setShowPayment(false);
+          setActivePaymentOrderId(null);
+          await fetchCustomerOrders();
+        }
       }
     } catch (err) {
       console.error(err);
@@ -272,265 +422,460 @@ export default function ChatBot({ session, backendUrl }) {
     }
   };
 
-  // Simulated Webhook triggers
-  const handleSimulateWebhook = async () => {
+  const handleSimulateWebhookForOrder = async (ord) => {
     if (!paymentDetails || !paymentDetails.razorpay_order_id) return;
-    
-    // Send simulated paid event directly to webhook
+    setLoading(true);
     try {
+      const headers = { 
+        'Content-Type': 'application/json', 
+        'x-razorpay-signature': 'sandbox_bypass' 
+      };
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`;
+      }
+
       const res = await fetch(`${backendUrl}/api/payments/webhook`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-razorpay-signature': 'sandbox_bypass' },
+        headers: headers,
         body: JSON.stringify({
           event: "order.paid",
+          order_id: ord.id,
+          razorpay_order_id: paymentDetails.razorpay_order_id,
           payload: {
             order: { entity: { id: paymentDetails.razorpay_order_id } },
             payment: { entity: { id: "pay_simulated_success_" + Math.random().toString(36).substr(2, 9) } }
           }
         })
       });
+
       if (res.ok) {
-        // WebSocket updates state
-      } else {
-        alert("Failed to send webhook event");
+        confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+        setShowPayment(false);
+        setActivePaymentOrderId(null);
+        await fetchCustomerOrders();
       }
     } catch (err) {
-      console.error(err);
+      console.error("[ChatBot] Error simulating webhook:", err);
+    } finally {
+      setLoading(false);
     }
   };
 
+  const filteredShopCatalog = shopCatalog.filter(p =>
+    p.name.toLowerCase().includes(catalogSearchQuery.trim().toLowerCase())
+  );
+
+  const displayOrders = selectedShop
+    ? customerOrders.filter(o => o.shop_id === selectedShop.id)
+    : [];
+
   return (
-    <div className="chat-container">
-      {/* Top Shop Selector */}
-      <div className="chat-header">
-        <div>
-          <span className="chat-title">💬 Multimodal AI Shopping Chatbot</span>
-          {selectedShop && <div style={{ fontSize: '12px', color: 'var(--secondary)' }}>Active: {selectedShop.name}</div>}
-        </div>
-        <div>
-          <select 
-            className="suggestions-select" 
-            style={{ padding: '6px 12px', fontSize: '13px' }}
-            onChange={(e) => {
-              const shop = shops.find(s => s.id === parseInt(e.target.value));
-              if (shop) handleShopSelect(shop);
-            }}
-            defaultValue=""
-          >
-            <option value="" disabled>🏪 Choose a Shop...</option>
-            {shops.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
-      </div>
-
-      {/* Message window */}
-      <div className="chat-messages">
-        {messages.map((m, i) => (
-          <div key={i} className={`chat-bubble ${m.sender}`}>
-            <div>{m.text}</div>
-            <div style={{ fontSize: '9px', textAlign: 'right', marginTop: '4px', opacity: 0.7 }}>{m.time}</div>
+    <div className="customer-layout-wrapper">
+      {/* Main Chat / Orders Window */}
+      <div className="chat-container">
+        {/* Top Header & Shop Selector */}
+        <div className="chat-header">
+          <div>
+            <span className="chat-title">💬 Multimodal AI Shopping Assistant</span>
+            {selectedShop && <div style={{ fontSize: '12px', color: 'var(--secondary)' }}>Active: {selectedShop.name}</div>}
           </div>
-        ))}
+          <div>
+            <select 
+              className="suggestions-select" 
+              style={{ padding: '6px 12px', fontSize: '13px' }}
+              onChange={(e) => {
+                const shop = shops.find(s => s.id === parseInt(e.target.value));
+                if (shop) handleShopSelect(shop);
+              }}
+              value={selectedShop?.id || ""}
+            >
+              <option value="" disabled>🏪 Choose a Shop...</option>
+              {shops.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+        </div>
 
-        {/* NLP matching table widget directly in chat */}
-        {extractedItems && (
-          <div className="order-extraction-card">
-            <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', marginBottom: '10px', color: 'var(--primary)' }}>
-              <ShoppingBag size={16} /> Extracted Items Review
-            </h4>
-            <div style={{ overflowX: 'auto' }}>
-              <div className="order-item-row" style={{ fontWeight: '700', fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
-                <div>Item</div>
-                <div>Qty</div>
-                <div>Suggestions / Actions</div>
-                <div>Remove</div>
+        {/* Customer Orders Area (No tab switcher, no chat bubbles) */}
+        <div className="chat-messages" style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '16px' }}>
+          
+          {/* Interactive Order Editing Card */}
+          {extractedItems && (
+            <div className="order-extraction-card" style={{ borderColor: 'var(--primary)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', margin: 0, color: 'var(--primary)' }}>
+                  <ShoppingBag size={16} /> Edit & Review Order Items
+                </h4>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <select 
+                    className="suggestions-select"
+                    style={{ padding: '4px 8px', fontSize: '12px' }}
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        handleAddCatalogProductToOrder(e.target.value);
+                        e.target.value = "";
+                      }
+                    }}
+                  >
+                    <option value="" disabled>➕ Add Product from Catalog...</option>
+                    {shopCatalog.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} (₹{p.price}/{p.unit})</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              
-              {extractedItems.map((item, idx) => (
-                <div key={idx} className="order-item-row" style={{ fontSize: '13px' }}>
-                  <div>
-                    {item.matched_product_name || item.original_name}
-                    {!item.recognized && <div className="unrecognized-badge">Unrecognized</div>}
+
+              <div style={{ overflowX: 'auto' }}>
+                <table className="premium-table" style={{ fontSize: '12px', marginBottom: '10px' }}>
+                  <thead>
+                    <tr>
+                      <th>Item Name</th>
+                      <th>Quantity</th>
+                      <th>Price / Unit</th>
+                      <th>Item Total</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {extractedItems.map((item, idx) => {
+                      const price = item.matched_product_price || 0;
+                      const itemTotal = (parseFloat(item.quantity) || 0) * price;
+                      return (
+                        <tr key={idx}>
+                          <td>
+                            <div style={{ fontWeight: '600' }}>{item.matched_product_name || item.original_name}</div>
+                            {!item.recognized && item.suggestions?.length > 0 && (
+                              <select 
+                                className="suggestions-select"
+                                style={{ marginTop: '4px', fontSize: '11px' }}
+                                onChange={(e) => handleItemSuggestionChange(idx, e.target.value)}
+                                defaultValue=""
+                              >
+                                <option value="" disabled>Select match from catalog...</option>
+                                {item.suggestions.map(s => (
+                                  <option key={s.id} value={s.id}>{s.name} (₹{s.price})</option>
+                                ))}
+                              </select>
+                            )}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <button 
+                                type="button" 
+                                className="btn-logout" 
+                                style={{ padding: '2px 6px', fontSize: '11px', fontWeight: '700' }}
+                                onClick={() => handleItemQtyStep(idx, -1)}
+                              >
+                                -
+                              </button>
+                              <input 
+                                type="number" 
+                                className="form-input" 
+                                style={{ padding: '3px 6px', fontSize: '12px', width: '55px', textAlign: 'center' }}
+                                value={item.quantity}
+                                onChange={(e) => handleItemQtyChange(idx, e.target.value)}
+                                step="0.5"
+                                min="0.1"
+                              />
+                              <button 
+                                type="button" 
+                                className="btn-logout" 
+                                style={{ padding: '2px 6px', fontSize: '11px', fontWeight: '700' }}
+                                onClick={() => handleItemQtyStep(idx, 1)}
+                              >
+                                +
+                              </button>
+                              <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{item.unit}</span>
+                            </div>
+                          </td>
+                          <td>₹{price > 0 ? price.toFixed(2) : '-'}</td>
+                          <td style={{ fontWeight: '700', color: 'var(--primary)' }}>
+                            {price > 0 ? `₹${itemTotal.toFixed(2)}` : '-'}
+                          </td>
+                          <td>
+                            <button 
+                              type="button" 
+                              className="btn-close-alert" 
+                              style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
+                              onClick={() => handleRemoveExtractedItem(idx)}
+                            >
+                              <Trash2 size={14} /> Remove
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Automatic Grand Total */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--surface-border)' }}>
+                <span style={{ fontSize: '14px', fontWeight: '800' }}>
+                  Grand Total: ₹{extractedItems.reduce((sum, i) => sum + ((parseFloat(i.quantity) || 0) * (i.matched_product_price || 0)), 0).toFixed(2)}
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button className="btn-primary" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={handleCreateDraftOrder}>
+                    Confirm Order & Send to Owner
+                  </button>
+                  <button 
+                    className="btn-logout" 
+                    style={{ padding: '8px 16px', fontSize: '13px' }}
+                    onClick={() => setExtractedItems(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Structured Order Cards List */}
+          {!selectedShop ? (
+            <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <Store size={48} style={{ opacity: 0.4, marginBottom: '12px' }} />
+              <h3 style={{ fontSize: '16px', color: 'var(--text-primary)', marginBottom: '6px' }}>No Shop Selected</h3>
+              <p style={{ fontSize: '13px', margin: 0 }}>Please select a shop from the dropdown above to view products and place an order.</p>
+            </div>
+          ) : displayOrders.length === 0 ? (
+            <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+              <p style={{ fontSize: '14px', margin: 0 }}>No orders placed at {selectedShop.name} yet.</p>
+              <p style={{ fontSize: '12px', marginTop: '6px' }}>Type your shopping list below or click "+ Add" from the product sidebar to start an order.</p>
+            </div>
+          ) : (
+            displayOrders.map(ord => (
+              <div 
+                key={ord.id} 
+                className="order-extraction-card" 
+                style={{ 
+                  marginBottom: '0', 
+                  borderColor: ord.payment_status === 'paid' ? '#10b981' : 'var(--primary)' 
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <span style={{ fontWeight: '800', fontSize: '15px', color: 'var(--primary)' }}>
+                    Order #{ord.order_number || ord.id}
+                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    {formatDateTime(ord.created_at)}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                  <span className={`badge-status ${ord.status}`} style={{ fontSize: '11px', textTransform: 'capitalize' }}>
+                    Status: {ord.status ? ord.status.replace('_', ' ') : 'Pending'}
+                  </span>
+                  <span className="badge-status pending" style={{ 
+                    fontSize: '11px', 
+                    textTransform: 'capitalize', 
+                    backgroundColor: ord.payment_status === 'paid' ? '#d4edda' : '#fff3cd', 
+                    color: ord.payment_status === 'paid' ? '#155724' : '#856404' 
+                  }}>
+                    Payment: {ord.payment_status ? ord.payment_status.replace('_', ' ') : 'Not Paid'}
+                  </span>
+                </div>
+
+                <div style={{ margin: '10px 0' }}>
+                  <div style={{ fontWeight: '700', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    📦 Ordered Items:
                   </div>
-                  <div>
-                    <input 
-                      type="number" 
-                      className="form-input" 
-                      style={{ padding: '4px 8px', fontSize: '12px', width: '60px' }}
-                      value={item.quantity}
-                      onChange={(e) => handleItemQtyChange(idx, e.target.value)}
-                    />
-                    <span style={{ fontSize: '11px', color: 'var(--text-secondary)', marginLeft: '4px' }}>{item.unit}</span>
-                  </div>
-                  <div>
-                    {!item.recognized && item.suggestions.length > 0 ? (
-                      <select 
-                        className="suggestions-select"
-                        onChange={(e) => handleItemSuggestionChange(idx, e.target.value)}
-                        defaultValue=""
-                      >
-                        <option value="" disabled>Choose replacement...</option>
-                        {item.suggestions.map(s => (
-                          <option key={s.id} value={s.id}>{s.name} (₹{s.price})</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span style={{ color: 'var(--secondary)', fontSize: '12px' }}>
-                        {item.recognized ? `₹${item.matched_product_price} / ${item.unit}` : "No similar items found"}
-                      </span>
-                    )}
-                  </div>
-                  <div>
-                    <button 
-                      className="btn-close-alert" 
-                      style={{ color: 'var(--error)' }}
-                      onClick={() => handleRemoveExtractedItem(idx)}
-                    >
-                      Remove
-                    </button>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="premium-table" style={{ width: '100%', fontSize: '12px', marginBottom: '8px' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left', padding: '6px 8px' }}>Product</th>
+                          <th style={{ textAlign: 'center', padding: '6px 8px' }}>Quantity</th>
+                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Price / Unit</th>
+                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Item Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ord.items && ord.items.length > 0 ? (
+                          ord.items.map((it, idx) => {
+                            const price = it.price_at_order || 0;
+                            const itemTotal = (it.quantity || 0) * price;
+                            return (
+                              <tr key={it.id || idx}>
+                                <td style={{ fontWeight: '600', padding: '6px 8px' }}>{it.product_name}</td>
+                                <td style={{ textAlign: 'center', padding: '6px 8px' }}>{it.quantity} {it.unit || ''}</td>
+                                <td style={{ textAlign: 'right', padding: '6px 8px' }}>₹{price.toFixed(2)}</td>
+                                <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--primary)', padding: '6px 8px' }}>
+                                  ₹{itemTotal.toFixed(2)}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        ) : (
+                          <tr>
+                            <td colSpan="4" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '8px' }}>No items</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
-              ))}
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid var(--surface-border)' }}>
+                  <span style={{ fontSize: '14px', fontWeight: '800', color: 'var(--text-primary)' }}>
+                    Total: ₹{ord.total_amount?.toFixed(2)}
+                  </span>
+                </div>
+
+                {/* Payment Action Buttons for Unpaid Orders */}
+                {ord.payment_status !== 'paid' && ord.status !== 'rejected' && ord.status !== 'deleted' && (
+                  <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px dashed var(--surface-border)' }}>
+                    {ord.payment_status === 'cash_pending' || ord.payment_method === 'cash' ? (
+                      <div style={{ backgroundColor: '#fff3cd', color: '#856404', padding: '8px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
+                        💵 Cash Payment Selected (Status: Cash Pending). Please pay ₹{ord.total_amount?.toFixed(2)} directly to shop owner.
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button 
+                          className="btn-primary" 
+                          style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--secondary)' }}
+                          onClick={() => handleInitiatePaymentForOrder(ord, 'razorpay')}
+                        >
+                          Pay Online (Razorpay QR)
+                        </button>
+                        <button 
+                          className="btn-logout" 
+                          style={{ padding: '6px 12px', fontSize: '12px', borderColor: 'var(--text-secondary)' }}
+                          onClick={() => handleInitiatePaymentForOrder(ord, 'cash')}
+                        >
+                          Pay Cash at Shop
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Razorpay QR Box */}
+                    {showPayment && paymentDetails && activePaymentOrderId === ord.id && (
+                      <div className="qr-modal" style={{ marginTop: '12px' }}>
+                        <h4 style={{ fontSize: '13px', marginBottom: '4px' }}>📱 Scan QR to Pay via Razorpay</h4>
+                        <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--primary)' }}>₹{paymentDetails.amount}</div>
+                        
+                        <img 
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(paymentDetails.upi_uri)}`}
+                          alt="Razorpay Test QR"
+                          style={{ margin: '10px 0', border: '1px solid var(--surface-border)', padding: '4px', borderRadius: '4px' }}
+                        />
+                        
+                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                          Razorpay Order ID: <span style={{ fontFamily: 'monospace' }}>{paymentDetails.razorpay_order_id}</span>
+                        </p>
+
+                        <button 
+                          className="btn-primary" 
+                          style={{ width: '100%', fontSize: '12px' }}
+                          onClick={() => handleSimulateWebhookForOrder(ord)}
+                        >
+                          Simulate Razorpay Payment Success (Demo)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+
+          {loading && (
+            <div style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)' }}>
+              <Loader size={18} className="animate-spin" /> <span style={{ fontSize: '13px' }}>AI is thinking...</span>
             </div>
+          )}
+          
+          <div ref={messagesEndRef} />
+        </div>
 
-            <div style={{ marginTop: '14px', display: 'flex', gap: '8px' }}>
-              <button className="btn-primary" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={handleCreateDraftOrder}>
-                Confirm & Send Draft to Owner
-              </button>
-              <button 
-                className="btn-logout" 
-                style={{ padding: '8px 16px', fontSize: '13px' }}
-                onClick={() => setExtractedItems(null)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Reviewed order state widget */}
-        {currentOrder && currentOrder.status === 'pending_customer' && (
-          <div className="order-extraction-card" style={{ borderColor: 'var(--secondary)' }}>
-            <h4 style={{ color: 'var(--secondary)', fontSize: '14px', marginBottom: '8px' }}>
-              🔔 Reviewed Order Draft #{currentOrder.id}
-            </h4>
-            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px' }}>
-              The owner edited quantities or prices according to stock availability. Please accept.
-            </p>
-            
-            <table className="premium-table" style={{ marginTop: '0', marginBottom: '14px' }}>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Quantity</th>
-                  <th>Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                {currentOrder.items.map(item => (
-                  <tr key={item.id}>
-                    <td>{item.product_name}</td>
-                    <td>{item.quantity} {item.unit}</td>
-                    <td>₹{item.price_at_order * item.quantity}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            
-            {currentOrder.notes && <div style={{ fontSize: '12px', padding: '8px', backgroundColor: 'var(--background)', borderRadius: '4px', marginBottom: '12px' }}><strong>Note from Shop:</strong> {currentOrder.notes}</div>}
-            
-            <div style={{ fontSize: '15px', fontWeight: '800', marginBottom: '14px' }}>Total Amount: ₹{currentOrder.total_amount}</div>
-            
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button 
-                className="btn-primary" 
-                style={{ padding: '8px 16px', fontSize: '13px', backgroundColor: 'var(--secondary)' }} 
-                onClick={() => handleInitiatePayment('razorpay')}
-              >
-                Pay Online (Razorpay QR)
-              </button>
-              <button 
-                className="btn-logout" 
-                style={{ padding: '8px 16px', fontSize: '13px', borderColor: 'var(--text-secondary)' }}
-                onClick={() => handleInitiatePayment('cash')}
-              >
-                Pay Cash at Shop
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Razorpay QR display box */}
-        {showPayment && paymentDetails && (
-          <div className="qr-modal">
-            <h4 style={{ fontSize: '14px', marginBottom: '4px' }}>📱 Scan QR to Pay</h4>
-            <div style={{ fontSize: '16px', fontWeight: '800', color: 'var(--primary)' }}>₹{paymentDetails.amount}</div>
-            
-            <img 
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(paymentDetails.upi_uri)}`}
-              alt="Razorpay Test QR"
-              style={{ margin: '14px 0', border: '1px solid var(--surface-border)', padding: '6px', borderRadius: '4px' }}
-            />
-            
-            <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '14px' }}>
-              Razorpay Order ID: <span style={{ fontFamily: 'monospace' }}>{paymentDetails.razorpay_order_id}</span>
-            </p>
-
-            <button 
-              className="btn-primary" 
-              style={{ width: '100%', fontSize: '13px' }}
-              onClick={handleSimulateWebhook}
-            >
-              Simulate Webhook Success (Demo)
-            </button>
-          </div>
-        )}
-
-        {loading && (
-          <div style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)' }}>
-            <Loader size={18} className="animate-spin" /> <span style={{ fontSize: '13px' }}>AI is thinking...</span>
-          </div>
-        )}
-        
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input area */}
-      <div className="chat-input-area">
-        <button 
-          className="btn-icon"
-          onClick={() => fileInputRef.current?.click()}
-          title="Upload image shopping list (TrOCR)"
-          disabled={!selectedShop}
-        >
-          <ImageIcon size={20} />
-        </button>
-        <input 
-          type="file" 
-          ref={fileInputRef} 
-          style={{ display: 'none' }} 
-          accept="image/*"
-          onChange={handleImageUpload}
-        />
-        
-        <form onSubmit={handleSendText} style={{ display: 'flex', flex: 1, gap: '8px' }}>
-          <input 
-            type="text"
-            className="chat-text-area"
-            placeholder={selectedShop ? "Type items list here..." : "Please select a shop first"}
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            disabled={!selectedShop}
-          />
+        {/* Input area */}
+        <div className="chat-input-area">
           <button 
-            type="submit" 
-            className="btn-icon send"
-            disabled={!selectedShop || !inputText.trim()}
+            className="btn-icon"
+            onClick={() => fileInputRef.current?.click()}
+            title="Upload image shopping list (TrOCR)"
+            disabled={!selectedShop}
           >
-            <Send size={18} />
+            <ImageIcon size={20} />
           </button>
-        </form>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            style={{ display: 'none' }} 
+            accept="image/*"
+            onChange={handleImageUpload}
+          />
+          
+          <form onSubmit={handleSendText} style={{ display: 'flex', flex: 1, gap: '8px' }}>
+            <input 
+              type="text"
+              className="chat-text-area"
+              placeholder={selectedShop ? "Type items list here (e.g. 2kg rice, 1 milk)..." : "Please select a shop first"}
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              disabled={!selectedShop}
+            />
+            <button 
+              type="submit" 
+              className="btn-icon send"
+              disabled={!selectedShop || !inputText.trim()}
+            >
+              <Send size={18} />
+            </button>
+          </form>
+        </div>
       </div>
+
+      {/* Dedicated Customer Product Sidebar */}
+      {selectedShop && (
+        <div className="customer-product-sidebar">
+          <div className="sidebar-catalog-header">
+            <div style={{ fontWeight: '700', fontSize: '14px', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Store size={18} /> Shop Products ({filteredShopCatalog.length})
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{selectedShop.name}</div>
+          </div>
+
+          {/* Instant Search Input */}
+          <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--surface-border)', backgroundColor: 'var(--surface)' }}>
+            <input 
+              type="text"
+              className="form-input"
+              style={{ padding: '6px 12px', fontSize: '13px' }}
+              placeholder="🔍 Search product name..."
+              value={catalogSearchQuery}
+              onChange={(e) => setCatalogSearchQuery(e.target.value)}
+            />
+          </div>
+
+          {/* Scrollable Product Cards List */}
+          <div className="sidebar-catalog-list">
+            {filteredShopCatalog.length === 0 ? (
+              <div style={{ padding: '20px', textAlign: 'center', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {catalogSearchQuery.trim() ? "No products match your search." : "No products available in this shop catalog."}
+              </div>
+            ) : (
+              filteredShopCatalog.map(p => (
+                <div key={p.id} className="catalog-product-item">
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: '600', fontSize: '13px', color: 'var(--text-primary)' }}>{p.name}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: '700', marginTop: '2px' }}>
+                      ₹{p.price.toFixed(2)} / {p.unit}
+                    </div>
+                  </div>
+                  <button 
+                    type="button"
+                    className="btn-primary"
+                    style={{ padding: '4px 10px', fontSize: '12px', width: 'auto' }}
+                    onClick={() => handleAddCatalogProductToOrder(p.id)}
+                  >
+                    + Add
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

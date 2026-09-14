@@ -334,7 +334,7 @@ export default function Login({ onLoginSuccess, backendUrl }) {
       }
 
       const session = await res.json();
-      localStorage.setItem('retail_session', JSON.stringify(session));
+      sessionStorage.setItem('retail_session', JSON.stringify(session));
       onLoginSuccess(session);
     } catch (err) {
       setError(err.message);
@@ -366,7 +366,7 @@ export default function Login({ onLoginSuccess, backendUrl }) {
       }
 
       const session = await res.json();
-      localStorage.setItem('retail_session', JSON.stringify(session));
+      sessionStorage.setItem('retail_session', JSON.stringify(session));
       onLoginSuccess(session);
     } catch (err) {
       setError(err.message);

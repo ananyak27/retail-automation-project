@@ -250,7 +250,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
       }
 
       const session = await res.json();
-      localStorage.setItem('retail_session', JSON.stringify(session));
+      sessionStorage.setItem('retail_session', JSON.stringify(session));
       onLoginSuccess(session);
     } catch (err) {
       setError(err.message);

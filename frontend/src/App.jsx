@@ -5,33 +5,46 @@ import OwnerDashboard from './components/OwnerDashboard';
 import { ShoppingCart } from 'lucide-react';
 
 const getBackendUrl = () => {
-  const hostname = window.location.hostname || '127.0.0.1';
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  const hostname = window.location.hostname;
+  if (!hostname || hostname === 'localhost' || hostname === '127.0.0.1') {
+    return 'http://192.168.1.105:8000';
+  }
   return `http://${hostname}:8000`;
 };
 
 const BACKEND_URL = getBackendUrl();
 
+export const getWebSocketUrl = (backendUrl, userId) => {
+  const wsProtocol = backendUrl.startsWith('https') ? 'wss:' : 'ws:';
+  const host = backendUrl.replace(/^https?:\/\//, '');
+  return `${wsProtocol}//${host}/ws/${userId}`;
+};
+
 export default function App() {
   const [session, setSession] = useState(null);
 
   useEffect(() => {
-    // Read session on startup
-    const stored = localStorage.getItem('retail_session');
+    // Read session on startup from sessionStorage for tab isolation
+    const stored = sessionStorage.getItem('retail_session');
     if (stored) {
       try {
         setSession(JSON.parse(stored));
       } catch (e) {
-        localStorage.removeItem('retail_session');
+        sessionStorage.removeItem('retail_session');
       }
     }
   }, []);
 
   const handleLoginSuccess = (userSession) => {
+    sessionStorage.setItem('retail_session', JSON.stringify(userSession));
     setSession(userSession);
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('retail_session');
+    sessionStorage.removeItem('retail_session');
     setSession(null);
   };
 

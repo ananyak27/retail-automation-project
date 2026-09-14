@@ -24,7 +24,7 @@ class ErrorBoundary extends React.Component {
           <h2 style={{ color: '#e53e3e' }}>Something went wrong</h2>
           <p style={{ color: '#4a5568', fontSize: '14px', marginBottom: '20px' }}>{this.state.error?.toString()}</p>
           <button 
-            onClick={() => { localStorage.clear(); window.location.reload(); }} 
+            onClick={() => { sessionStorage.clear(); window.location.reload(); }} 
             style={{ padding: '10px 20px', backgroundColor: '#3182ce', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: '600' }}
           >
             Reset Session & Reload

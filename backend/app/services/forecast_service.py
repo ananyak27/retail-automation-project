@@ -54,9 +54,10 @@ def load_prophet_models():
     return _prophet_models
 
 
-def get_product_model(product_id: int):
+def get_product_model(product_id: int, db: Session = None):
     """
     Get the already-trained Prophet model for a product.
+    If product_id is not directly in models, match by product name or shop 1 product ID.
     """
 
     models = load_prophet_models()
@@ -66,6 +67,20 @@ def get_product_model(product_id: int):
 
     if str(product_id) in models:
         return models[str(product_id)]
+
+    if db is not None:
+        product = db.query(Product).filter(Product.id == product_id).first()
+        if product:
+            # Find matching product in shop 1 by name
+            shop1_prod = db.query(Product).filter(
+                Product.shop_id == 1,
+                Product.name == product.name
+            ).first()
+            if shop1_prod:
+                if shop1_prod.id in models:
+                    return models[shop1_prod.id]
+                if str(shop1_prod.id) in models:
+                    return models[str(shop1_prod.id)]
 
     return None
 
@@ -119,7 +134,7 @@ def generate_forecast(
 
     try:
 
-        model = get_product_model(product_id)
+        model = get_product_model(product_id, db=db)
 
     except Exception as e:
 
