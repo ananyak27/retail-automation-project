@@ -4,11 +4,26 @@ import { auth } from '../firebaseConfig';
 import { ShieldCheck, Phone, Key, HelpCircle, User, ArrowRight, UserPlus, LogIn } from 'lucide-react';
 import OwnerRegister from './OwnerRegister';
 
-export default function Login({ onLoginSuccess, backendUrl }) {
+const getEffectiveBackendUrl = (propBackendUrl) => {
+  if (import.meta.env?.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  const hostname = window.location.hostname;
+  if (hostname) {
+    return `http://${hostname}:8000`;
+  }
+  if (propBackendUrl) {
+    return propBackendUrl;
+  }
+  return 'http://localhost:8000';
+};
+
+export default function Login({ onLoginSuccess, backendUrl: propBackendUrl }) {
+  const backendUrl = getEffectiveBackendUrl(propBackendUrl);
   const [isRegisteringOwner, setIsRegisteringOwner] = useState(false);
   const [role, setRole] = useState('customer'); // 'customer' or 'owner'
   const [authMode, setAuthMode] = useState('login'); // 'login' or 'register' (for customer)
-  
+
   // Form fields
   const [phoneNumber, setPhoneNumber] = useState('');
   const [customerName, setCustomerName] = useState('');
@@ -129,55 +144,70 @@ export default function Login({ onLoginSuccess, backendUrl }) {
         body: JSON.stringify({ phone_number: formattedPhone, name: customerName || null })
       });
 
-      if (checkRes.ok) {
-        const accountData = await checkRes.json();
+      if (!checkRes.ok) {
+        const errorData = await checkRes.json().catch(() => ({}));
+        throw new Error(errorData.detail || "Account check failed. Please check backend connection.");
+      }
 
-        // 1. REGISTRATION MODE CHECKS
-        if (role === 'customer' && authMode === 'register') {
-          if (accountData.exists) {
-            setLoading(false);
-            if (accountData.role === 'owner') {
-              setError("An account with this name and phone number already exists as an owner. Please use the owner login.");
-              return;
-            } else {
-              setError("An account with this name and phone number already exists. Please log in.");
-              setSuggestLogin(true);
-              return;
-            }
+      const accountData = await checkRes.json();
+
+      // 1. REGISTRATION MODE CHECKS
+      if (role === 'customer' && authMode === 'register') {
+        if (accountData.exists) {
+          setLoading(false);
+          if (accountData.role === 'owner') {
+            setError("An account with this name and phone number already exists as an owner. Please use the owner login.");
+            return;
+          } else {
+            setError("An account with this name and phone number already exists. Please log in.");
+            setSuggestLogin(true);
+            return;
           }
-        } 
-        // 2. LOGIN MODE CHECKS
-        else {
-          if (role === 'customer') {
-            if (!accountData.exists) {
-              setLoading(false);
-              setError("No customer account found with this phone number. Please register first.");
-              setSuggestRegistration(true);
-              return;
-            } else if (accountData.role === 'owner') {
-              setLoading(false);
-              setError("This phone number belongs to an owner account. Please use the owner login.");
-              return;
-            }
-          } else if (role === 'owner') {
-            if (!accountData.exists) {
-              setLoading(false);
-              setError("No owner account found with this phone number. Please register first.");
-              setSuggestRegistration(true);
-              return;
-            } else if (accountData.role === 'customer') {
-              setLoading(false);
-              setError("This phone number belongs to a customer account. Please use the customer login.");
-              return;
-            }
+        }
+      }
+      // 2. LOGIN MODE CHECKS
+      else {
+        if (role === 'customer') {
+          if (!accountData.exists) {
+            setLoading(false);
+            setError("No customer account found with this phone number. Please register first.");
+            setSuggestRegistration(true);
+            return;
+          } else if (accountData.role === 'owner') {
+            setLoading(false);
+            setError("This phone number belongs to an owner account. Please use the owner login.");
+            return;
+          }
+        } else if (role === 'owner') {
+          if (!accountData.exists) {
+            setLoading(false);
+            setError("No owner account found with this phone number. Please register first.");
+            setSuggestRegistration(true);
+            return;
+          } else if (accountData.role === 'customer') {
+            setLoading(false);
+            setError("This phone number belongs to a customer account. Please use the customer login.");
+            return;
           }
         }
       }
 
-      const appVerifier = window.recaptchaVerifier;
+      let appVerifier = window.recaptchaVerifier;
+      if (!appVerifier) {
+        const container = document.getElementById('recaptcha-container');
+        if (container) {
+          appVerifier = new RecaptchaVerifier(auth, container, {
+            size: 'invisible',
+            callback: () => {}
+          });
+          window.recaptchaVerifier = appVerifier;
+        }
+      }
+
       if (!appVerifier) {
         throw new Error("reCAPTCHA verifier not initialized. Please refresh the page.");
       }
+
       const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
       setConfirmationResult(confirmation);
       setInfoMsg(`OTP sent successfully to ${formattedPhone}. Enter the OTP sent to your phone.`);
@@ -205,7 +235,7 @@ export default function Login({ onLoginSuccess, backendUrl }) {
       const result = await confirmationResult.confirm(otp);
       const user = result.user;
       const idToken = await user.getIdToken();
-      
+
       const formattedPhone = cleanPhone(phoneNumber);
       if (role === 'customer' && authMode === 'register') {
         await submitCustomerRegistration(formattedPhone, idToken);
@@ -231,7 +261,7 @@ export default function Login({ onLoginSuccess, backendUrl }) {
     setInfoMsg('');
     setSuggestLogin(false);
     setSuggestRegistration(false);
-    
+
     if (!phoneNumber.trim()) {
       setError("Please enter your Phone Number first.");
       return;
@@ -388,19 +418,19 @@ export default function Login({ onLoginSuccess, backendUrl }) {
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px', color: 'var(--primary)' }}>
           <ShieldCheck size={48} />
         </div>
-        
+
         <h2 className="auth-title">Welcome to Retail Automate</h2>
         <p className="auth-subtitle">Select role and proceed with phone verification</p>
 
         {/* Role Selector */}
         <div className="role-selector">
-          <div 
+          <div
             className={`role-option ${role === 'customer' ? 'active' : ''}`}
             onClick={() => handleRoleChange('customer')}
           >
             👨‍💼 Customer
           </div>
-          <div 
+          <div
             className={`role-option ${role === 'owner' ? 'active' : ''}`}
             onClick={() => handleRoleChange('owner')}
           >
@@ -460,20 +490,20 @@ export default function Login({ onLoginSuccess, backendUrl }) {
 
         {/* Owner Registration Header Banner */}
         {role === 'owner' && (
-          <div style={{ 
-            marginBottom: '20px', 
-            padding: '12px', 
-            backgroundColor: 'var(--primary-light)', 
-            borderRadius: 'var(--radius-sm)', 
-            display: 'flex', 
-            alignItems: 'center', 
+          <div style={{
+            marginBottom: '20px',
+            padding: '12px',
+            backgroundColor: 'var(--primary-light)',
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
             justify: 'space-between',
             border: '1px solid var(--surface-border)'
           }}>
             <span style={{ fontSize: '13px', color: 'var(--primary)', fontWeight: '500' }}>New Shop Owner?</span>
-            <button 
-              type="button" 
-              className="btn-logout" 
+            <button
+              type="button"
+              className="btn-logout"
               style={{ borderColor: 'var(--primary)', color: 'var(--primary)', fontWeight: '600', padding: '4px 12px', fontSize: '12px' }}
               onClick={() => setIsRegisteringOwner(true)}
             >
@@ -485,11 +515,11 @@ export default function Login({ onLoginSuccess, backendUrl }) {
         {/* Error Display */}
         {error && (
           <div style={{
-            backgroundColor: 'var(--error-light)', 
-            color: 'var(--error)', 
-            padding: '12px', 
-            borderRadius: 'var(--radius-sm)', 
-            fontSize: '13px', 
+            backgroundColor: 'var(--error-light)',
+            color: 'var(--error)',
+            padding: '12px',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '13px',
             marginBottom: '20px',
             borderLeft: '4px solid var(--error)',
             fontWeight: '500'
@@ -533,11 +563,11 @@ export default function Login({ onLoginSuccess, backendUrl }) {
         {/* Info Message Display */}
         {infoMsg && (
           <div style={{
-            backgroundColor: 'var(--secondary-light)', 
-            color: 'var(--secondary)', 
-            padding: '12px', 
-            borderRadius: 'var(--radius-sm)', 
-            fontSize: '13px', 
+            backgroundColor: 'var(--secondary-light)',
+            color: 'var(--secondary)',
+            padding: '12px',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '13px',
             marginBottom: '20px',
             borderLeft: '4px solid var(--secondary)'
           }}>
@@ -553,11 +583,11 @@ export default function Login({ onLoginSuccess, backendUrl }) {
                 <label className="form-label">Full Name *</label>
                 <div style={{ position: 'relative' }}>
                   <User size={18} style={{ position: 'absolute', left: '14px', top: '14px', color: 'var(--text-secondary)' }} />
-                  <input 
-                    type="text" 
-                    className="form-input" 
+                  <input
+                    type="text"
+                    className="form-input"
                     style={{ paddingLeft: '42px' }}
-                    placeholder="John Doe" 
+                    placeholder="John Doe"
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
                     required
@@ -570,20 +600,20 @@ export default function Login({ onLoginSuccess, backendUrl }) {
               <label className="form-label">Phone Number *</label>
               <div style={{ position: 'relative' }}>
                 <Phone size={18} style={{ position: 'absolute', left: '14px', top: '14px', color: 'var(--text-secondary)' }} />
-                <input 
-                  type="tel" 
-                  className="form-input" 
+                <input
+                  type="tel"
+                  className="form-input"
                   style={{ paddingLeft: '42px' }}
-                  placeholder="Enter phone number" 
+                  placeholder="Enter phone number"
                   value={phoneNumber}
                   onChange={(e) => setPhoneNumber(e.target.value)}
                   required
                 />
               </div>
             </div>
-            
+
             <div id="recaptcha-container"></div>
-            
+
             <button type="submit" className="btn-primary" disabled={loading}>
               {loading ? "Sending OTP..." : "Send Firebase OTP via SMS"}
             </button>
@@ -595,11 +625,11 @@ export default function Login({ onLoginSuccess, backendUrl }) {
               <label className="form-label">Enter 6-Digit Verification Code *</label>
               <div style={{ position: 'relative' }}>
                 <Key size={18} style={{ position: 'absolute', left: '14px', top: '14px', color: 'var(--text-secondary)' }} />
-                <input 
-                  type="text" 
-                  className="form-input" 
+                <input
+                  type="text"
+                  className="form-input"
                   style={{ paddingLeft: '42px' }}
-                  placeholder="123456" 
+                  placeholder="123456"
                   value={otp}
                   onChange={(e) => setOtp(e.target.value)}
                   maxLength={6}
@@ -607,7 +637,7 @@ export default function Login({ onLoginSuccess, backendUrl }) {
                 />
               </div>
             </div>
-            
+
             <button type="submit" className="btn-primary" disabled={loading}>
               {loading
                 ? "Verifying..."
@@ -615,10 +645,10 @@ export default function Login({ onLoginSuccess, backendUrl }) {
                   ? "Verify OTP & Create Account"
                   : "Verify OTP & Login"}
             </button>
-            
-            <button 
-              type="button" 
-              className="btn-logout" 
+
+            <button
+              type="button"
+              className="btn-logout"
               style={{ width: '100%', marginTop: '10px' }}
               onClick={resetOtpState}
             >
@@ -629,18 +659,18 @@ export default function Login({ onLoginSuccess, backendUrl }) {
 
         {/* Developer Registration / Login Bypass */}
         {showBypass && (
-          <div style={{ 
-            marginTop: '24px', 
-            paddingTop: '20px', 
-            borderTop: '1px solid var(--surface-border)', 
-            textAlign: 'center' 
+          <div style={{
+            marginTop: '24px',
+            paddingTop: '20px',
+            borderTop: '1px solid var(--surface-border)',
+            textAlign: 'center'
           }}>
             <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
               <HelpCircle size={14} /> Testing mode without Firebase configured?
             </p>
-            <button 
-              type="button" 
-              className="btn-logout" 
+            <button
+              type="button"
+              className="btn-logout"
               style={{ width: '100%', borderColor: 'var(--primary)', color: 'var(--primary)', backgroundColor: 'var(--primary-light)' }}
               onClick={handleBypassLogin}
               disabled={loading}

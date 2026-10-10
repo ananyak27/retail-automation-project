@@ -13,7 +13,7 @@ export default function ChatBot({ session, backendUrl }) {
 
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
-  
+
   // States for draft order review & payment
   const [extractedItems, setExtractedItems] = useState(null);
   const [currentOrder, setCurrentOrder] = useState(null);
@@ -59,7 +59,7 @@ export default function ChatBot({ session, backendUrl }) {
     isMountedRef.current = true;
 
     const connectWebSocket = () => {
-      if (!session || !session.user_id) return;
+      if (!session || !session.access_token) return;
 
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
@@ -77,7 +77,7 @@ export default function ChatBot({ session, backendUrl }) {
         socketRef.current = null;
       }
 
-      const wsUrl = getWebSocketUrl(backendUrl, session.user_id);
+      const wsUrl = getWebSocketUrl(backendUrl, session.access_token);
       console.log(`[ChatBot] Connecting WebSocket to: ${wsUrl}`);
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;
@@ -93,7 +93,7 @@ export default function ChatBot({ session, backendUrl }) {
         try {
           const data = JSON.parse(event.data);
           console.log("[ChatBot] WebSocket message received:", data);
-          
+
           if (data.type === 'order_reviewed' || data.type === 'order_rejected' || data.type === 'order_deleted') {
             fetchCustomerOrders();
           }
@@ -186,7 +186,7 @@ export default function ChatBot({ session, backendUrl }) {
       if (res.ok) {
         const data = await res.json();
         setShops(data);
-        
+
         // Auto-restore selected shop from localStorage after refresh
         const savedShopId = localStorage.getItem('customer_selected_shop_id');
         if (savedShopId && data.length > 0) {
@@ -350,7 +350,7 @@ export default function ChatBot({ session, backendUrl }) {
 
   const handleCreateDraftOrder = async () => {
     if (!extractedItems || extractedItems.length === 0) return;
-    
+
     const validItems = extractedItems.filter(item => item.recognized);
     if (validItems.length === 0) return;
 
@@ -389,21 +389,147 @@ export default function ChatBot({ session, backendUrl }) {
     }
   };
 
+  // Load the official Razorpay Checkout.js script once (idempotent)
+  const loadRazorpayScript = () => {
+    return new Promise((resolve) => {
+      if (window.Razorpay) {
+        resolve(true);
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
+      script.onload = () => resolve(true);
+      script.onerror = () => {
+        console.error('[ChatBot] Failed to load Razorpay Checkout.js');
+        resolve(false);
+      };
+      document.body.appendChild(script);
+    });
+  };
+
   const handleInitiatePaymentForOrder = async (ord, method) => {
     setLoading(true);
     try {
       if (method === 'razorpay') {
+        // Step 1: Ask backend to create a Razorpay order
         const res = await fetch(`${backendUrl}/api/payments/create-razorpay-order/${ord.id}`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${session.access_token}` }
         });
-        if (res.ok) {
-          const data = await res.json();
-          setPaymentDetails(data);
-          setActivePaymentOrderId(ord.id);
-          setShowPayment(true);
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          alert(`Cannot initiate payment: ${errData.detail || 'Server error'}`);
+          return;
         }
+
+        const data = await res.json();
+        setPaymentDetails(data);
+        setActivePaymentOrderId(ord.id);
+
+        // Step 2: Load the official Razorpay Checkout.js
+        const scriptLoaded = await loadRazorpayScript();
+
+        if (!scriptLoaded || !window.Razorpay) {
+          // Checkout.js failed to load (e.g. no internet / blocked) —
+          // fall back to the test/demo QR display so offline dev still works
+          console.warn('[ChatBot] Razorpay Checkout.js unavailable; showing stub QR panel.');
+          setShowPayment(true);
+          return;
+        }
+
+        // Check if this is stub mode (no real key configured)
+        const isStubMode = !data.key_id || data.key_id === 'rzp_test_placeholder_id';
+        if (isStubMode) {
+          // Placeholder credentials — show the test demo panel
+          console.info('[ChatBot] Stub Razorpay mode: real key not configured. Showing test demo panel.');
+          setShowPayment(true);
+          return;
+        }
+
+        setLoading(false); // Don't block UI while modal is open
+
+        // Step 3: Open Razorpay Checkout modal
+        const options = {
+          key: data.key_id,                      // Public key (rzp_test_... or rzp_live_...)
+          amount: data.amount_paise,              // In paise
+          currency: data.currency || 'INR',
+          name: 'RetailAutomate',
+          description: `Order #${ord.shop_order_number || ord.id}`,
+          order_id: data.razorpay_order_id,       // Razorpay order ID from backend
+
+          handler: async function (response) {
+            // Step 4: Submit the checkout response to backend for authoritative verification
+            setLoading(true);
+            try {
+              const verifyRes = await fetch(`${backendUrl}/api/payments/verify-razorpay-signature`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${session.access_token}`
+                },
+                body: JSON.stringify({
+                  order_id: ord.id,
+                  razorpay_order_id: response.razorpay_order_id,
+                  razorpay_payment_id: response.razorpay_payment_id,
+                  razorpay_signature: response.razorpay_signature
+                })
+              });
+
+              if (verifyRes.ok) {
+                // Payment confirmed by backend
+                confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+                setShowPayment(false);
+                setActivePaymentOrderId(null);
+                setPaymentDetails(null);
+                await fetchCustomerOrders();
+              } else {
+                const errData = await verifyRes.json().catch(() => ({}));
+                alert(`Payment verification failed: ${errData.detail || 'Please contact support.'}`);
+              }
+            } catch (err) {
+              console.error('[ChatBot] Error verifying payment signature:', err);
+              alert('Network error during payment verification. Please contact support.');
+            } finally {
+              setLoading(false);
+            }
+          },
+
+          prefill: {
+            name: session?.name || '',
+            contact: session?.phone_number || ''
+          },
+
+          theme: { color: '#6366f1' },
+
+          modal: {
+            ondismiss: function () {
+              console.log('[ChatBot] Razorpay checkout dismissed by user.');
+              setShowPayment(false);
+              setActivePaymentOrderId(null);
+              setPaymentDetails(null);
+              setLoading(false);
+            }
+          }
+        };
+
+        const rzp = new window.Razorpay(options);
+        rzp.on('payment.failed', function (response) {
+          console.error('[ChatBot] Razorpay payment failed:', response.error);
+          alert(
+            `Payment failed: ${response.error?.description || 'Unknown error'}. ` +
+            `Error code: ${response.error?.code || 'N/A'}. Please try again.`
+          );
+          setShowPayment(false);
+          setActivePaymentOrderId(null);
+          setPaymentDetails(null);
+          setLoading(false);
+        });
+        rzp.open();
+
       } else {
+        // Cash payment
         const res = await fetch(`${backendUrl}/api/payments/initiate/${ord.id}?method=${method}`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${session.access_token}` }
@@ -413,38 +539,36 @@ export default function ChatBot({ session, backendUrl }) {
           setShowPayment(false);
           setActivePaymentOrderId(null);
           await fetchCustomerOrders();
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          alert(`Cash payment initiation failed: ${errData.detail || 'Server error'}`);
         }
       }
     } catch (err) {
-      console.error(err);
+      console.error('[ChatBot] Payment initiation error:', err);
+      alert('Network error. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSimulateWebhookForOrder = async (ord) => {
+  // Dev/test helper: simulate payment success when real Razorpay credentials are not configured.
+  // This path is ONLY reached when Checkout.js loads but key_id is a placeholder,
+  // or when Checkout.js fails to load. It calls /demo-payment-success (dev-only endpoint).
+  const handleSimulatePaymentForOrder = async (ord) => {
     if (!paymentDetails || !paymentDetails.razorpay_order_id) return;
     setLoading(true);
     try {
-      const headers = { 
-        'Content-Type': 'application/json', 
-        'x-razorpay-signature': 'sandbox_bypass' 
-      };
-      if (session?.access_token) {
-        headers['Authorization'] = `Bearer ${session.access_token}`;
-      }
-
-      const res = await fetch(`${backendUrl}/api/payments/webhook`, {
+      const res = await fetch(`${backendUrl}/api/payments/demo-payment-success`, {
         method: 'POST',
-        headers: headers,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
         body: JSON.stringify({
-          event: "order.paid",
           order_id: ord.id,
           razorpay_order_id: paymentDetails.razorpay_order_id,
-          payload: {
-            order: { entity: { id: paymentDetails.razorpay_order_id } },
-            payment: { entity: { id: "pay_simulated_success_" + Math.random().toString(36).substr(2, 9) } }
-          }
+          razorpay_payment_id: `pay_demo_${Date.now()}`
         })
       });
 
@@ -452,14 +576,19 @@ export default function ChatBot({ session, backendUrl }) {
         confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
         setShowPayment(false);
         setActivePaymentOrderId(null);
+        setPaymentDetails(null);
         await fetchCustomerOrders();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(`Demo simulation failed: ${errData.detail || 'Server error'}`);
       }
     } catch (err) {
-      console.error("[ChatBot] Error simulating webhook:", err);
+      console.error('[ChatBot] Error during demo payment simulation:', err);
     } finally {
       setLoading(false);
     }
   };
+
 
   const filteredShopCatalog = shopCatalog.filter(p =>
     p.name.toLowerCase().includes(catalogSearchQuery.trim().toLowerCase())
@@ -480,8 +609,8 @@ export default function ChatBot({ session, backendUrl }) {
             {selectedShop && <div style={{ fontSize: '12px', color: 'var(--secondary)' }}>Active: {selectedShop.name}</div>}
           </div>
           <div>
-            <select 
-              className="suggestions-select" 
+            <select
+              className="suggestions-select"
               style={{ padding: '6px 12px', fontSize: '13px' }}
               onChange={(e) => {
                 const shop = shops.find(s => s.id === parseInt(e.target.value));
@@ -497,7 +626,7 @@ export default function ChatBot({ session, backendUrl }) {
 
         {/* Customer Orders Area (No tab switcher, no chat bubbles) */}
         <div className="chat-messages" style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '16px' }}>
-          
+
           {/* Interactive Order Editing Card */}
           {extractedItems && (
             <div className="order-extraction-card" style={{ borderColor: 'var(--primary)' }}>
@@ -506,7 +635,7 @@ export default function ChatBot({ session, backendUrl }) {
                   <ShoppingBag size={16} /> Edit & Review Order Items
                 </h4>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <select 
+                  <select
                     className="suggestions-select"
                     style={{ padding: '4px 8px', fontSize: '12px' }}
                     value=""
@@ -545,7 +674,7 @@ export default function ChatBot({ session, backendUrl }) {
                           <td>
                             <div style={{ fontWeight: '600' }}>{item.matched_product_name || item.original_name}</div>
                             {!item.recognized && item.suggestions?.length > 0 && (
-                              <select 
+                              <select
                                 className="suggestions-select"
                                 style={{ marginTop: '4px', fontSize: '11px' }}
                                 onChange={(e) => handleItemSuggestionChange(idx, e.target.value)}
@@ -560,26 +689,26 @@ export default function ChatBot({ session, backendUrl }) {
                           </td>
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <button 
-                                type="button" 
-                                className="btn-logout" 
+                              <button
+                                type="button"
+                                className="btn-logout"
                                 style={{ padding: '2px 6px', fontSize: '11px', fontWeight: '700' }}
                                 onClick={() => handleItemQtyStep(idx, -1)}
                               >
                                 -
                               </button>
-                              <input 
-                                type="number" 
-                                className="form-input" 
+                              <input
+                                type="number"
+                                className="form-input"
                                 style={{ padding: '3px 6px', fontSize: '12px', width: '55px', textAlign: 'center' }}
                                 value={item.quantity}
                                 onChange={(e) => handleItemQtyChange(idx, e.target.value)}
                                 step="0.5"
                                 min="0.1"
                               />
-                              <button 
-                                type="button" 
-                                className="btn-logout" 
+                              <button
+                                type="button"
+                                className="btn-logout"
                                 style={{ padding: '2px 6px', fontSize: '11px', fontWeight: '700' }}
                                 onClick={() => handleItemQtyStep(idx, 1)}
                               >
@@ -593,9 +722,9 @@ export default function ChatBot({ session, backendUrl }) {
                             {price > 0 ? `₹${itemTotal.toFixed(2)}` : '-'}
                           </td>
                           <td>
-                            <button 
-                              type="button" 
-                              className="btn-close-alert" 
+                            <button
+                              type="button"
+                              className="btn-close-alert"
                               style={{ color: 'var(--error)', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}
                               onClick={() => handleRemoveExtractedItem(idx)}
                             >
@@ -618,8 +747,8 @@ export default function ChatBot({ session, backendUrl }) {
                   <button className="btn-primary" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={handleCreateDraftOrder}>
                     Confirm Order & Send to Owner
                   </button>
-                  <button 
-                    className="btn-logout" 
+                  <button
+                    className="btn-logout"
                     style={{ padding: '8px 16px', fontSize: '13px' }}
                     onClick={() => setExtractedItems(null)}
                   >
@@ -644,12 +773,12 @@ export default function ChatBot({ session, backendUrl }) {
             </div>
           ) : (
             displayOrders.map(ord => (
-              <div 
-                key={ord.id} 
-                className="order-extraction-card" 
-                style={{ 
-                  marginBottom: '0', 
-                  borderColor: ord.payment_status === 'paid' ? '#10b981' : 'var(--primary)' 
+              <div
+                key={ord.id}
+                className="order-extraction-card"
+                style={{
+                  marginBottom: '0',
+                  borderColor: ord.payment_status === 'paid' ? '#10b981' : 'var(--primary)'
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -665,11 +794,11 @@ export default function ChatBot({ session, backendUrl }) {
                   <span className={`badge-status ${ord.status}`} style={{ fontSize: '11px', textTransform: 'capitalize' }}>
                     Status: {ord.status ? ord.status.replace('_', ' ') : 'Pending'}
                   </span>
-                  <span className="badge-status pending" style={{ 
-                    fontSize: '11px', 
-                    textTransform: 'capitalize', 
-                    backgroundColor: ord.payment_status === 'paid' ? '#d4edda' : '#fff3cd', 
-                    color: ord.payment_status === 'paid' ? '#155724' : '#856404' 
+                  <span className="badge-status pending" style={{
+                    fontSize: '11px',
+                    textTransform: 'capitalize',
+                    backgroundColor: ord.payment_status === 'paid' ? '#d4edda' : '#fff3cd',
+                    color: ord.payment_status === 'paid' ? '#155724' : '#856404'
                   }}>
                     Payment: {ord.payment_status ? ord.payment_status.replace('_', ' ') : 'Not Paid'}
                   </span>
@@ -730,15 +859,15 @@ export default function ChatBot({ session, backendUrl }) {
                       </div>
                     ) : (
                       <div style={{ display: 'flex', gap: '8px' }}>
-                        <button 
-                          className="btn-primary" 
+                        <button
+                          className="btn-primary"
                           style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--secondary)' }}
                           onClick={() => handleInitiatePaymentForOrder(ord, 'razorpay')}
                         >
-                          Pay Online (Razorpay QR)
+                          Pay Online (Razorpay)
                         </button>
-                        <button 
-                          className="btn-logout" 
+                        <button
+                          className="btn-logout"
                           style={{ padding: '6px 12px', fontSize: '12px', borderColor: 'var(--text-secondary)' }}
                           onClick={() => handleInitiatePaymentForOrder(ord, 'cash')}
                         >
@@ -747,26 +876,42 @@ export default function ChatBot({ session, backendUrl }) {
                       </div>
                     )}
 
-                    {/* Razorpay QR Box */}
+                    {/* Razorpay Payment / QR Box */}
                     {showPayment && paymentDetails && activePaymentOrderId === ord.id && (
                       <div className="qr-modal" style={{ marginTop: '12px' }}>
-                        <h4 style={{ fontSize: '13px', marginBottom: '4px' }}>📱 Scan QR to Pay via Razorpay</h4>
-                        <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--primary)' }}>₹{paymentDetails.amount}</div>
-                        
-                        <img 
-                          src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(paymentDetails.upi_uri)}`}
-                          alt="Razorpay Test QR"
-                          style={{ margin: '10px 0', border: '1px solid var(--surface-border)', padding: '4px', borderRadius: '4px' }}
-                        />
-                        
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <h4 style={{ fontSize: '13px', margin: 0 }}>📱 Pay Online via Razorpay</h4>
+                          <button
+                            type="button"
+                            className="btn-logout"
+                            style={{ padding: '2px 8px', fontSize: '11px' }}
+                            onClick={() => {
+                              setShowPayment(false);
+                              setActivePaymentOrderId(null);
+                              setPaymentDetails(null);
+                            }}
+                          >
+                            Close
+                          </button>
+                        </div>
+                        <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--primary)', marginTop: '4px' }}>₹{paymentDetails.amount}</div>
+
+                        {paymentDetails.upi_uri && (
+                          <img
+                            src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(paymentDetails.upi_uri)}`}
+                            alt="Razorpay Test QR"
+                            style={{ margin: '10px 0', border: '1px solid var(--surface-border)', padding: '4px', borderRadius: '4px' }}
+                          />
+                        )}
+
                         <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                           Razorpay Order ID: <span style={{ fontFamily: 'monospace' }}>{paymentDetails.razorpay_order_id}</span>
                         </p>
 
-                        <button 
-                          className="btn-primary" 
+                        <button
+                          className="btn-primary"
                           style={{ width: '100%', fontSize: '12px' }}
-                          onClick={() => handleSimulateWebhookForOrder(ord)}
+                          onClick={() => handleSimulatePaymentForOrder(ord)}
                         >
                           Simulate Razorpay Payment Success (Demo)
                         </button>
@@ -783,13 +928,13 @@ export default function ChatBot({ session, backendUrl }) {
               <Loader size={18} className="animate-spin" /> <span style={{ fontSize: '13px' }}>AI is thinking...</span>
             </div>
           )}
-          
+
           <div ref={messagesEndRef} />
         </div>
 
         {/* Input area */}
         <div className="chat-input-area">
-          <button 
+          <button
             className="btn-icon"
             onClick={() => fileInputRef.current?.click()}
             title="Upload image shopping list (TrOCR)"
@@ -797,16 +942,16 @@ export default function ChatBot({ session, backendUrl }) {
           >
             <ImageIcon size={20} />
           </button>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            style={{ display: 'none' }} 
+          <input
+            type="file"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
             accept="image/*"
             onChange={handleImageUpload}
           />
-          
+
           <form onSubmit={handleSendText} style={{ display: 'flex', flex: 1, gap: '8px' }}>
-            <input 
+            <input
               type="text"
               className="chat-text-area"
               placeholder={selectedShop ? "Type items list here (e.g. 2kg rice, 1 milk)..." : "Please select a shop first"}
@@ -814,8 +959,8 @@ export default function ChatBot({ session, backendUrl }) {
               onChange={(e) => setInputText(e.target.value)}
               disabled={!selectedShop}
             />
-            <button 
-              type="submit" 
+            <button
+              type="submit"
               className="btn-icon send"
               disabled={!selectedShop || !inputText.trim()}
             >
@@ -837,7 +982,7 @@ export default function ChatBot({ session, backendUrl }) {
 
           {/* Instant Search Input */}
           <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--surface-border)', backgroundColor: 'var(--surface)' }}>
-            <input 
+            <input
               type="text"
               className="form-input"
               style={{ padding: '6px 12px', fontSize: '13px' }}
@@ -862,7 +1007,7 @@ export default function ChatBot({ session, backendUrl }) {
                       ₹{p.price.toFixed(2)} / {p.unit}
                     </div>
                   </div>
-                  <button 
+                  <button
                     type="button"
                     className="btn-primary"
                     style={{ padding: '4px 10px', fontSize: '12px', width: 'auto' }}

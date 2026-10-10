@@ -8,19 +8,19 @@ const getBackendUrl = () => {
   if (import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL;
   }
-  const hostname = window.location.hostname;
-  if (!hostname || hostname === 'localhost' || hostname === '127.0.0.1') {
-    return 'http://192.168.1.105:8000';
-  }
+  const hostname = window.location.hostname || 'localhost';
   return `http://${hostname}:8000`;
 };
 
 const BACKEND_URL = getBackendUrl();
 
-export const getWebSocketUrl = (backendUrl, userId) => {
+export const getWebSocketUrl = (backendUrl, token) => {
   const wsProtocol = backendUrl.startsWith('https') ? 'wss:' : 'ws:';
   const host = backendUrl.replace(/^https?:\/\//, '');
-  return `${wsProtocol}//${host}/ws/${userId}`;
+  if (token) {
+    return `${wsProtocol}//${host}/ws?token=${encodeURIComponent(token)}`;
+  }
+  return `${wsProtocol}//${host}/ws`;
 };
 
 export default function App() {

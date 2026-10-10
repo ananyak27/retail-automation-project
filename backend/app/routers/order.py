@@ -29,7 +29,7 @@ def serialize_order(order: Order, db: Session) -> dict:
             "unit": item.unit,
             "price_at_order": item.price_at_order
         })
-        
+
     cust = db.query(User).filter(User.id == order.customer_id).first()
     cust_name = (cust.owner_name or cust.phone_number) if cust else f"Customer #{order.customer_id}"
     cust_phone = cust.phone_number if cust else "N/A"
@@ -37,7 +37,7 @@ def serialize_order(order: Order, db: Session) -> dict:
     created_at_str = order.created_at.isoformat() + "Z" if order.created_at else None
     updated_at_str = order.updated_at.isoformat() + "Z" if order.updated_at else None
     paid_at_str = order.paid_at.isoformat() + "Z" if getattr(order, 'paid_at', None) else None
-    
+
     order_num = getattr(order, 'shop_order_number', None) or order.id
 
     return {
@@ -63,7 +63,7 @@ def serialize_order(order: Order, db: Session) -> dict:
 
 @router.post("/process-image")
 async def process_image_list(
-    file: UploadFile = File(...), 
+    file: UploadFile = File(...),
     shop_id: int = Query(...),
     db: Session = Depends(get_db)
 ):
@@ -71,16 +71,16 @@ async def process_image_list(
     Step 5 & 6: Receives image, processes with TrOCR + spaCy, performs catalog matching.
     """
     contents = await file.read()
-    
+
     # 1. TrOCR extracts raw text
     extracted_text = perform_ocr(contents)
-    
+
     # 2. spaCy extracts quantities and products
     extracted_items = extract_entities(extracted_text)
-    
+
     # 3. Fuzzy match against catalog
     matches = match_extracted_items(db, shop_id, extracted_items)
-    
+
     return {
         "raw_text": extracted_text,
         "extracted_items": matches
@@ -88,7 +88,7 @@ async def process_image_list(
 
 @router.post("/process-text")
 def process_text_list(
-    text: str = Form(...), 
+    text: str = Form(...),
     shop_id: int = Query(...),
     db: Session = Depends(get_db)
 ):
@@ -97,10 +97,10 @@ def process_text_list(
     """
     # 1. spaCy extracts quantities and products
     extracted_items = extract_entities(text)
-    
+
     # 2. Fuzzy match against catalog
     matches = match_extracted_items(db, shop_id, extracted_items)
-    
+
     return {
         "extracted_items": matches
     }
@@ -114,23 +114,38 @@ async def create_draft_order(
     """
     Step 7: Creates a draft order in the database with shop-specific sequential order number and alerts the owner.
     """
-    # 1. Calculate initial total amount
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Order must contain at least one item.")
+
+    # 1. Calculate initial total amount using authoritative database prices and validate stock
     total = 0.0
     order_items = []
-    
+
     for item_data in payload.items:
-        prod = db.query(Product).filter(Product.id == item_data.product_id).first()
+        prod = db.query(Product).filter(Product.id == item_data.product_id).with_for_update().first()
         if not prod:
             raise HTTPException(status_code=404, detail=f"Product ID {item_data.product_id} not found.")
-            
-        price = item_data.price_at_order if item_data.price_at_order > 0 else prod.price
+
+        if prod.shop_id != payload.shop_id:
+            raise HTTPException(status_code=400, detail=f"Product '{prod.name}' does not belong to the selected shop.")
+
+        if item_data.quantity <= 0:
+            raise HTTPException(status_code=400, detail=f"Invalid quantity for '{prod.name}'. Must be greater than 0.")
+
+        if prod.stock < item_data.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient stock for '{prod.name}'. Available: {prod.stock} {prod.unit}, Requested: {item_data.quantity} {prod.unit}"
+            )
+
+        price = prod.price if prod.price > 0 else item_data.price_at_order
         item_total = price * item_data.quantity
         total += item_total
-        
+
         order_items.append(OrderItem(
             product_id=item_data.product_id,
             quantity=item_data.quantity,
-            unit=item_data.unit,
+            unit=prod.unit or item_data.unit,
             price_at_order=price
         ))
 
@@ -154,11 +169,11 @@ async def create_draft_order(
         notes=payload.notes,
         items=order_items
     )
-    
+
     db.add(order)
     db.commit()
     db.refresh(order)
-    
+
     serialized = serialize_order(order, db)
 
     # 4. Create database Alert for owner
@@ -167,11 +182,11 @@ async def create_draft_order(
     alert = Alert(
         shop_id=shop.id,
         type="new_order",
-        message=f"New Order #{display_num} received from {cust_display_name} ({current_user.phone_number}). Total: ₹{order.total_amount:.2f}."
+        message=f"New Order #{display_num} received from {cust_display_name} ({current_user.phone_number}). Total: â‚¹{order.total_amount:.2f}."
     )
     db.add(alert)
     db.commit()
-    
+
     # 5. Notify Owner in real-time via WebSocket with COMPLETE order details
     ws_msg = {
         "type": "new_order",
@@ -184,7 +199,7 @@ async def create_draft_order(
         "order_details": serialized
     }
     await manager.send_personal_message(ws_msg, shop.owner_id)
-    
+
     return serialized
 
 @router.put("/{order_id}/review")
@@ -199,46 +214,48 @@ async def owner_review_order(
     """
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="Only shop owners can review orders.")
-        
+
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found.")
-        
+
     # Verify owner owns this shop
     shop = db.query(Shop).filter(Shop.id == order.shop_id, Shop.owner_id == current_user.id).first()
     if not shop:
         raise HTTPException(status_code=403, detail="You do not own the shop for this order.")
-        
+
     # Update items if provided in payload
     if payload.items is not None:
         # Delete old items
         db.query(OrderItem).filter(OrderItem.order_id == order_id).delete()
-        
+
         # Add updated items
         new_total = 0.0
         for item_data in payload.items:
             prod = db.query(Product).filter(Product.id == item_data.product_id).first()
-            price = item_data.price_at_order if item_data.price_at_order > 0 else (prod.price if prod else 0)
+            if not prod or prod.shop_id != order.shop_id:
+                raise HTTPException(status_code=400, detail=f"Product ID {item_data.product_id} does not belong to this shop.")
+            price = prod.price if prod.price > 0 else (item_data.price_at_order if item_data.price_at_order > 0 else 0)
             new_total += price * item_data.quantity
-            
+
             db_item = OrderItem(
                 order_id=order_id,
                 product_id=item_data.product_id,
                 quantity=item_data.quantity,
-                unit=item_data.unit,
+                unit=prod.unit or item_data.unit,
                 price_at_order=price
             )
             db.add(db_item)
         order.total_amount = new_total
-        
+
     if payload.notes is not None:
         order.notes = payload.notes
-        
+
     # Transition status: owner reviewed -> pending client confirmation
     order.status = "pending_customer"
     db.commit()
     db.refresh(order)
-    
+
     # Notify Customer via WebSocket
     ws_msg = {
         "type": "order_reviewed",
@@ -247,7 +264,7 @@ async def owner_review_order(
         "status": order.status
     }
     await manager.send_personal_message(ws_msg, order.customer_id)
-    
+
     return serialize_order(order, db)
 
 @router.get("/", response_model=List[dict])
@@ -261,12 +278,12 @@ def list_orders(
     List orders. Customers get their own orders; owners get their shop's orders.
     """
     query = db.query(Order)
-    
+
     if current_user.role == "owner":
         # Check shops owned by owner
         owner_shops = db.query(Shop).filter(Shop.owner_id == current_user.id).all()
         owner_shop_ids = [s.id for s in owner_shops]
-        
+
         if shop_id:
             if shop_id not in owner_shop_ids:
                 raise HTTPException(status_code=403, detail="You do not own this shop.")
@@ -278,7 +295,7 @@ def list_orders(
         query = query.filter(Order.customer_id == current_user.id)
         if shop_id:
             query = query.filter(Order.shop_id == shop_id)
-            
+
     orders = query.order_by(Order.created_at.desc()).all()
     return [serialize_order(o, db) for o in orders]
 
@@ -290,7 +307,7 @@ def get_order_details(order_id: int, current_user: User = Depends(get_current_us
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found.")
-        
+
     # Check permissions
     if current_user.role == "owner":
         shop = db.query(Shop).filter(Shop.id == order.shop_id, Shop.owner_id == current_user.id).first()
@@ -299,7 +316,7 @@ def get_order_details(order_id: int, current_user: User = Depends(get_current_us
     else:
         if order.customer_id != current_user.id:
             raise HTTPException(status_code=403, detail="This is not your order.")
-            
+
     return serialize_order(order, db)
 
 @router.put("/{order_id}/reject")
@@ -309,23 +326,23 @@ async def reject_order(order_id: int, current_user: User = Depends(get_current_u
     """
     if current_user.role != "owner":
         raise HTTPException(status_code=403, detail="Only shop owners can reject orders.")
-        
+
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found.")
-        
+
     shop = db.query(Shop).filter(Shop.id == order.shop_id, Shop.owner_id == current_user.id).first()
     if not shop:
         raise HTTPException(status_code=403, detail="You do not own the shop for this order.")
-        
+
     if order.status == "paid" or order.payment_status == "paid":
         raise HTTPException(status_code=400, detail="Cannot reject an order that has already been paid.")
-        
+
     order.status = "rejected"
     order.payment_status = "failed"
     db.commit()
     db.refresh(order)
-    
+
     # Notify customer via WebSocket
     ws_msg = {
         "type": "order_rejected",
@@ -334,7 +351,7 @@ async def reject_order(order_id: int, current_user: User = Depends(get_current_u
         "status": "rejected"
     }
     await manager.send_personal_message(ws_msg, order.customer_id)
-    
+
     return serialize_order(order, db)
 
 @router.delete("/{order_id}")
@@ -370,4 +387,3 @@ async def delete_order(order_id: int, current_user: User = Depends(get_current_u
         "message": f"Order #{order_id} deleted successfully.",
         "order_id": order_id
     }
-

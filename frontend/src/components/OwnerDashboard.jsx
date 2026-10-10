@@ -100,8 +100,8 @@ export default function OwnerDashboard({ session, backendUrl }) {
     fetchOrders();
     fetchAlerts();
 
+    if (!session?.access_token) return;
     const userId = session?.user_id || ownerProfile?.id;
-    if (!userId) return;
 
     isMountedRef.current = true;
 
@@ -122,7 +122,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
         socketRef.current = null;
       }
 
-      const wsUrl = getWebSocketUrl(backendUrl, userId);
+      const wsUrl = getWebSocketUrl(backendUrl, session.access_token);
       console.log(`[OwnerDashboard] Connecting WebSocket to: ${wsUrl}`);
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket;

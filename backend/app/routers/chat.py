@@ -60,7 +60,10 @@ async def create_chat_message(
     # Verify shop exists
     shop = db.query(Shop).filter(Shop.id == payload.shop_id).first()
     if not shop:
-        raise HTTPException(status_code=44, detail="Shop not found")
+        raise HTTPException(status_code=404, detail="Shop not found")
+
+    if current_user.role == 'owner' and shop.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not own this shop.")
 
     new_msg = ChatMessage(
         shop_id=payload.shop_id,

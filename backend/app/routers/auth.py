@@ -50,6 +50,11 @@ def verify_firebase_token(id_token: str) -> dict:
     """
     # Graceful fallback for mock testing (e.g. if token is "mock_token_+919876543210")
     if id_token.startswith("mock_token_"):
+        if getattr(settings, 'ENVIRONMENT', 'development').lower() != "development":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Developer bypass tokens are disabled in production environment."
+            )
         phone = id_token.replace("mock_token_", "")
         normalized = normalize_phone_number(phone)
         return {
@@ -119,6 +124,23 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="User not found.")
     return user
 
+def verify_token_string(token: str, db: Session) -> User:
+    """
+    Decodes a JWT token string and returns the corresponding User, or None if invalid.
+    Used for WebSocket authentication.
+    """
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        phone_number = payload.get("sub")
+        if not phone_number:
+            return None
+    except Exception:
+        return None
+
+    return db.query(User).filter(User.phone_number == phone_number).first()
+
 @router.post("/check-account", response_model=CheckAccountResponse)
 def check_account(payload: CheckAccountRequest, db: Session = Depends(get_db)):
     """
@@ -167,7 +189,7 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
         )
             
     # 4. Generate local JWT
-    access_token = create_access_token({"sub": user.phone_number, "role": user.role})
+    access_token = create_access_token({"sub": user.phone_number, "role": user.role, "user_id": user.id})
     
     return {
         "access_token": access_token,
@@ -210,7 +232,7 @@ def register_customer(payload: CustomerRegister, db: Session = Depends(get_db)):
     db.refresh(user)
 
     # 5. Generate local JWT access token
-    access_token = create_access_token({"sub": user.phone_number, "role": user.role})
+    access_token = create_access_token({"sub": user.phone_number, "role": user.role, "user_id": user.id})
     
     return {
         "access_token": access_token,
@@ -268,7 +290,7 @@ def register_owner(payload: OwnerRegister, db: Session = Depends(get_db)):
     db.refresh(shop)
 
     # 6. Generate local JWT access token
-    access_token = create_access_token({"sub": user.phone_number, "role": user.role})
+    access_token = create_access_token({"sub": user.phone_number, "role": user.role, "user_id": user.id})
     
     return {
         "access_token": access_token,

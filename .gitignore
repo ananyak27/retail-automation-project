@@ -25,4 +25,5 @@ build/
 
 # OS
 .DS_Store
-Thumbs.db
+Thumbs.dbbackup_snapshot/
+backup_snapshot/

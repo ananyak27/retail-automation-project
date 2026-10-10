@@ -1,10 +1,17 @@
 import logging
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from app.database import engine, Base
-from app.routers import auth, shop, product, order, payment, forecast, alert, chat
-from app.websocket_manager import manager
+import json
+from typing import Optional
 
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Query, status
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text, inspect
+from sqlalchemy.orm import Session
+
+from app.database import engine, Base, get_db, SessionLocal
+from app.routers import auth, shop, product, order, payment, forecast, alert, chat
+from app.routers.auth import verify_token_string
+from app.websocket_manager import manager
+from app.config import settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -18,16 +25,15 @@ app = FastAPI(
 )
 
 # Configure CORS
+origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()] if settings.CORS_ORIGINS and settings.CORS_ORIGINS != "*" else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins for local deployment
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-from sqlalchemy import text, inspect
-from app.config import settings
 
 # Startup Database Auto-Initialization
 @app.on_event("startup")
@@ -62,12 +68,22 @@ app.include_router(alert.router)
 app.include_router(chat.router)
 
 
-import json
+async def handle_ws_connection(websocket: WebSocket, token: Optional[str] = None):
+    auth_user = None
+    if token:
+        db = SessionLocal()
+        try:
+            auth_user = verify_token_string(token, db)
+        finally:
+            db.close()
 
-# WebSocket Endpoint for real-time sync
-@app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: int):
-    await manager.connect(user_id, websocket)
+    if not auth_user:
+        logger.warning("Rejecting unauthenticated WebSocket connection. Valid JWT token required.")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    effective_user_id = auth_user.id
+    await manager.connect(effective_user_id, websocket)
     try:
         while True:
             # Maintain active connection and listen for heartbeat
@@ -75,10 +91,19 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int):
             if data == "ping" or '"type":"ping"' in data.replace(" ", ""):
                 await websocket.send_text(json.dumps({"type": "pong"}))
     except WebSocketDisconnect:
-        manager.disconnect(user_id, websocket)
+        manager.disconnect(effective_user_id, websocket)
     except Exception as e:
-        logger.error(f"WebSocket error for user {user_id}: {e}")
-        manager.disconnect(user_id, websocket)
+        logger.error(f"WebSocket error for user {effective_user_id}: {e}")
+        manager.disconnect(effective_user_id, websocket)
+
+# WebSocket Endpoints for real-time sync
+@app.websocket("/ws")
+async def websocket_endpoint_token(websocket: WebSocket, token: Optional[str] = Query(None)):
+    await handle_ws_connection(websocket, token)
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint_user(websocket: WebSocket, user_id: str, token: Optional[str] = Query(None)):
+    await handle_ws_connection(websocket, token)
 
 @app.get("/")
 def read_root():
@@ -86,4 +111,18 @@ def read_root():
         "status": "online",
         "project": "AI-Powered Multimodal Retail Automation and Predictive Business Intelligence System",
         "documentation": "/docs"
+    }
+
+@app.get("/api/health")
+def health_check(db: Session = Depends(get_db)):
+    db_status = "healthy"
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as e:
+        db_status = f"unhealthy: {str(e)}"
+    return {
+        "status": "online" if db_status == "healthy" else "degraded",
+        "database": db_status,
+        "environment": settings.ENVIRONMENT,
+        "websocket_active_users": len(manager.active_connections)
     }
