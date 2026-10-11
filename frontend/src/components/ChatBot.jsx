@@ -236,16 +236,26 @@ export default function ChatBot({ session, backendUrl }) {
   };
 
   const fetchShopCatalog = async (shopId) => {
-    try {
-      const res = await fetch(`${backendUrl}/api/products/?shop_id=${shopId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setShopCatalog(data);
-      }
-    } catch (err) {
-      console.error("Error fetching shop catalog:", err);
+  try {
+    const res = await fetch(
+      `${backendUrl}/api/products/?shop_id=${shopId}`
+    );
+
+    console.log("Catalog shop ID:", shopId);
+    console.log("Catalog API status:", res.status);
+
+    if (!res.ok) {
+      console.error("Catalog API error:", await res.text());
+      return;
     }
-  };
+
+    const data = await res.json();
+    console.log("Catalog products received:", data.length, data);
+    setShopCatalog(data);
+  } catch (err) {
+    console.error("Error fetching shop catalog:", err);
+  }
+};
 
   const fetchChatMessages = async (shopId) => {
     if (!session?.access_token || !shopId) return;

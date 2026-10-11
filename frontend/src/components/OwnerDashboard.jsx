@@ -271,22 +271,35 @@ export default function OwnerDashboard({ session, backendUrl }) {
   };
 
   const fetchProducts = async () => {
-    if (!shop) return;
-    try {
-      const res = await fetch(`${backendUrl}/api/products/?shop_id=${shop.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setProducts(data);
-        if (data.length > 0 && !selectedForecastProduct) {
-          setSelectedForecastProduct(data[0].id.toString());
-          setForecastSearchQuery(data[0].name);
-          fetchForecast(data[0].id);
-        }
-      }
-    } catch (err) {
-      console.error(err);
+  if (!shop?.id) return;
+
+  try {
+    const res = await fetch(
+      `${backendUrl}/api/products/?shop_id=${shop.id}`
+    );
+
+    console.log("Products API status:", res.status);
+    console.log("Products API URL:", `${backendUrl}/api/products/?shop_id=${shop.id}`);
+
+    if (!res.ok) {
+      console.error("Failed to fetch products:", await res.text());
+      return;
     }
-  };
+
+  const data = await res.json();
+    console.log("Products received:", data.length, data);
+
+    setProducts(data);
+
+    if (data.length > 0 && !selectedForecastProduct) {
+      setSelectedForecastProduct(data[0].id.toString());
+      setForecastSearchQuery(data[0].name);
+      fetchForecast(data[0].id);
+    }
+  } catch (err) {
+    console.error("Products fetch error:", err);
+  }
+};
 
   const fetchOrders = async () => {
     if (!shop) return;
@@ -1291,13 +1304,13 @@ export default function OwnerDashboard({ session, backendUrl }) {
         {/* Tab content 3: Forecasting dashboard */}
         {activeTab === 'forecast' && (
           <div className="card-content">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 📈 Meta Prophet Demand Forecasting
               </h3>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary)' }}>Select Product:</span>
-                <div style={{ position: 'relative', width: '220px', maxWidth: '100%' }}>
+                <div style={{ position: 'relative', width: '220px' }}>
                   <input
                     type="text"
                     className="form-input"
@@ -1499,7 +1512,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               <h4 style={{ fontSize: '14px', color: 'var(--primary)', marginBottom: '14px', fontWeight: '600', letterSpacing: '0.5px' }}>
                 BUSINESS INFORMATION
               </h4>
-              <div className="form-grid-2" style={{ fontSize: '14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '14px' }}>
                 <div>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>Shop Name</span>
                   <strong>{shop?.name || 'N/A'}</strong>
@@ -1516,7 +1529,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               <h4 style={{ fontSize: '14px', color: 'var(--primary)', marginBottom: '14px', fontWeight: '600', letterSpacing: '0.5px' }}>
                 PAYMENT INFORMATION
               </h4>
-              <div className="form-grid-2" style={{ marginBottom: '16px', fontSize: '14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px', fontSize: '14px' }}>
                 <div>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>Bank Account Holder Name</span>
                   <strong>{ownerProfile?.bank_account_holder_name || 'N/A'}</strong>
@@ -1526,7 +1539,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
                   <strong>{ownerProfile?.bank_name || 'N/A'}</strong>
                 </div>
               </div>
-              <div className="form-grid-3" style={{ fontSize: '14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', fontSize: '14px' }}>
                 <div>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>Masked Account Number</span>
                   <strong>
@@ -1782,7 +1795,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               <button className="btn-close-modal" onClick={() => setViewingOrderModal(null)}>✕</button>
             </div>
 
-            <div className="form-grid-2" style={{ backgroundColor: 'var(--background)', padding: '14px', borderRadius: 'var(--radius-sm)', marginBottom: '16px', fontSize: '13px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', backgroundColor: 'var(--background)', padding: '14px', borderRadius: 'var(--radius-sm)', marginBottom: '16px', fontSize: '13px' }}>
               <div>
                 <strong>Customer Name:</strong> {viewingOrderModal.customer_name || 'Customer'}
               </div>
