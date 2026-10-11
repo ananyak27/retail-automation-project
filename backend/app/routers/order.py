@@ -180,10 +180,10 @@ async def create_draft_order(
     cust_display_name = current_user.owner_name or current_user.phone_number
     display_num = order.shop_order_number or order.id
     alert = Alert(
-        shop_id=shop.id,
-        type="new_order",
-        message=f"New Order #{display_num} received from {cust_display_name} ({current_user.phone_number}). Total: â‚¹{order.total_amount:.2f}."
-    )
+    shop_id=shop.id,
+    type="new_order",
+    message=f"New Order #{display_num} received from {cust_display_name} ({current_user.phone_number}). Total: ₹{order.total_amount:.2f}."
+)
     db.add(alert)
     db.commit()
 

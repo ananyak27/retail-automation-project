@@ -1,65 +1,123 @@
+"""
+nlp_service.py
+==============
+Extracts (Product, Quantity, Unit) from grocery order text.
+
+Priority:
+  1. Custom trained NER model at 'models/retail_ner'  ← trained with train_spacy_ner.py
+  2. Generic en_core_web_sm (noun-based extraction)
+  3. Regex fallback (no spaCy needed)
+
+The custom model uses spacy.blank("en") so it works WITHOUT torch/GPU.
+"""
+
 import re
-import subprocess
 import logging
 
 logger = logging.getLogger(__name__)
 
-nlp = None
+# Global model cache
+_nlp = None
+_model_type = None   # 'custom_ner' | 'generic' | None (regex only)
+
 
 def load_spacy_model():
-    global nlp
-    if nlp is None:
+    """Load the best available spaCy model. Returns (nlp, model_type)."""
+    global _nlp, _model_type
+
+    if _nlp is not None:
+        return _nlp, _model_type
+
+    import os
+
+    # ── Try 1: Custom trained retail NER model (no torch required) ────────────
+    custom_model_path = os.path.join(os.path.dirname(__file__), "..", "..", "models", "retail_ner")
+    custom_model_path = os.path.normpath(custom_model_path)
+
+    try:
+        import spacy
+        if os.path.exists(custom_model_path):
+            _nlp = spacy.load(custom_model_path)
+            _model_type = "custom_ner"
+            logger.info(f"✅ Loaded custom retail NER model from: {custom_model_path}")
+            return _nlp, _model_type
+    except Exception as e:
+        logger.warning(f"Could not load custom NER model: {e}")
+
+    # ── Try 2: Generic en_core_web_sm ─────────────────────────────────────────
+    try:
+        import spacy
+        _nlp = spacy.load("en_core_web_sm")
+        _model_type = "generic"
+        logger.info("✅ Loaded generic en_core_web_sm spaCy model.")
+        return _nlp, _model_type
+    except OSError:
+        logger.info("en_core_web_sm not found, trying to download...")
         try:
-            import spacy
-            try:
-                nlp = spacy.load("en_core_web_sm")
-                logger.info("spaCy en_core_web_sm model loaded successfully.")
-            except OSError:
-                logger.info("en_core_web_sm model not found. Downloading...")
-                try:
-                    subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"], check=True)
-                    nlp = spacy.load("en_core_web_sm")
-                    logger.info("spaCy en_core_web_sm downloaded and loaded successfully.")
-                except Exception as e:
-                    logger.error(f"Failed to download spaCy model: {e}. Falling back to regex NLP parser.")
-                    nlp = False
+            import subprocess
+            subprocess.run(["python", "-m", "spacy", "download", "en_core_web_sm"], check=True)
+            _nlp = spacy.load("en_core_web_sm")
+            _model_type = "generic"
+            return _nlp, _model_type
         except Exception as e:
-            logger.warning(f"spaCy/torch library initialization failed ({e}). Falling back to regex NLP parser.")
-            nlp = False
+            logger.warning(f"Could not load/download en_core_web_sm: {e}")
+    except Exception as e:
+        logger.warning(f"spaCy initialization failed ({e}). Using regex fallback.")
 
-    return nlp if nlp is not False else None
+    # ── Fallback: No spaCy ────────────────────────────────────────────────────
+    _nlp = False
+    _model_type = None
+    return None, None
 
-def extract_entities(text: str) -> list:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unit normalization map
+# ─────────────────────────────────────────────────────────────────────────────
+UNIT_ALIASES = {
+    "kilo": "kg", "kilogram": "kg", "kilograms": "kg", "kgs": "kg",
+    "liter": "litre", "liters": "litre", "litres": "litre", "ltr": "litre", "ltrs": "litre", "l": "litre",
+    "gm": "g", "gram": "g", "grams": "g",
+    "ml": "ml", "milliliter": "ml", "millilitre": "ml",
+    "pieces": "piece", "pcs": "piece", "pc": "piece",
+    "packet": "packet", "pkt": "packet", "packets": "packet",
+    "dozen": "dozen",
+    "box": "box", "boxes": "box",
+    "bottle": "bottle", "bottles": "bottle",
+    "bar": "bar", "bars": "bar",
+    "cup": "cup", "cups": "cup",
+    "bunch": "bunch",
+    "can": "can", "cans": "can",
+}
+
+UNITS_LIST = list(UNIT_ALIASES.keys()) + ["kg", "g", "ml", "litre", "piece", "packet", "dozen", "box", "bottle", "bar", "cup", "bunch", "can"]
+
+
+def normalize_unit(raw_unit: str) -> str:
+    if not raw_unit:
+        return "piece"
+    u = raw_unit.lower().strip()
+    return UNIT_ALIASES.get(u, u)
+
+
+def regex_extract(text: str) -> list:
     """
-    Extracts (Product, Quantity, Unit) from the given text.
-    Handles text inputs like:
-      - 2kg Rice
-      - 3 Milk
-      - 5 piece Soap
-      - 1.5 litre Milk
-    Returns a list of dicts: [{'product': 'Rice', 'quantity': 2.0, 'unit': 'kg'}, ...]
+    Pure regex extraction — works when spaCy is unavailable.
+    Handles: '2kg rice', '2.5 kg rice', '2 rice', '1/2 kg rice'
     """
     lines = [line.strip() for line in text.split("\n") if line.strip()]
-    extracted_items = []
+    items = []
 
-    # Try loading spaCy for intelligent POS tags
-    nlp_model = load_spacy_model()
+    units_pattern = "|".join(sorted(UNITS_LIST, key=len, reverse=True))
+    pattern = re.compile(
+        r"^\s*([\d./]+)\s*(" + units_pattern + r")?\s+(.+)$",
+        re.IGNORECASE
+    )
 
-    # Predefined units to match
-    units_list = ["kg", "kilo", "kilogram", "g", "gm", "gram", "litre", "liter", "l", "ltr", "piece", "pieces", "pc", "packet", "pkt", "box", "bottle", "cup"]
-    
     for line in lines:
-        # 1. Regex parse: Extract quantity, unit and item
-        # Matches formats: '2.5kg rice', '2.5 kg rice', '2 rice', '2 packets rice'
-        pattern = r"^\s*([\d./]+)\s*(" + "|".join(units_list) + r")?\s*(.*)$"
-        match = re.match(pattern, line, re.IGNORECASE)
-        
-        if match:
-            raw_qty, raw_unit, raw_prod = match.groups()
-            
-            # Clean quantity
+        m = pattern.match(line)
+        if m:
+            raw_qty, raw_unit, raw_prod = m.groups()
             try:
-                # Handle fractions like 1/2
                 if "/" in raw_qty:
                     num, denom = raw_qty.split("/")
                     quantity = float(num) / float(denom)
@@ -67,58 +125,140 @@ def extract_entities(text: str) -> list:
                     quantity = float(raw_qty)
             except ValueError:
                 quantity = 1.0
-                
-            # Clean unit
-            unit = raw_unit.lower() if raw_unit else "piece"
-            # Normalize common units
-            if unit in ["kilo", "kilogram"]:
-                unit = "kg"
-            elif unit in ["liter", "ltr", "l"]:
-                unit = "litre"
-            elif unit in ["gm", "gram"]:
-                unit = "g"
-            elif unit in ["pieces", "pc"]:
-                unit = "piece"
-                
-            # Clean product name
-            product = raw_prod.strip()
-            
-            # If spaCy is loaded, let's refine the product name (e.g. lemmatize or extract nouns)
-            if nlp_model and product:
-                doc = nlp_model(product)
-                # Keep noun phrases or nouns for clean product naming
-                nouns = [token.text for token in doc if token.pos_ in ["NOUN", "PROPN", "ADJ"]]
-                if nouns:
-                    refined_product = " ".join(nouns)
-                    if len(refined_product) > 1:
-                        product = refined_product
-            
-            # Only add if we found a product name
+
+            unit = normalize_unit(raw_unit)
+            product = raw_prod.strip().title()
+
             if product:
-                # Capitalize product name
-                product = product.title()
-                extracted_items.append({
-                    "product": product,
-                    "quantity": quantity,
-                    "unit": unit
-                })
+                items.append({"product": product, "quantity": quantity, "unit": unit})
         else:
-            # Fallback if no digits were matched (e.g. "Rice", "Sugar and Soap")
-            if nlp_model:
-                doc = nlp_model(line)
-                # Simple extraction of Noun chunks
-                for chunk in doc.noun_chunks:
-                    extracted_items.append({
-                        "product": chunk.text.title(),
-                        "quantity": 1.0,
-                        "unit": "piece"
-                    })
+            # Line starts with product name (e.g. "Rice 2 kg")
+            m2 = re.match(
+                r"^(.+?)\s+([\d./]+)\s*(" + units_pattern + r")?$",
+                line, re.IGNORECASE
+            )
+            if m2:
+                raw_prod, raw_qty, raw_unit = m2.groups()
+                try:
+                    quantity = float(raw_qty)
+                except ValueError:
+                    quantity = 1.0
+                unit = normalize_unit(raw_unit)
+                product = raw_prod.strip().title()
+                if product:
+                    items.append({"product": product, "quantity": quantity, "unit": unit})
+            elif line:
+                # Just a product name, no quantity
+                items.append({"product": line.strip().title(), "quantity": 1.0, "unit": "piece"})
+
+    return items
+
+
+def custom_ner_extract(nlp_model, text: str) -> list:
+    """
+    Use the custom trained NER model to extract PRODUCT, QUANTITY, UNIT entities.
+    Falls back to regex for lines where NER finds nothing.
+    """
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    items = []
+
+    for line in lines:
+        doc = nlp_model(line)
+        entities = {ent.label_: ent.text for ent in doc.ents}
+
+        product = entities.get("PRODUCT", "").strip()
+        qty_text = entities.get("QUANTITY", "1").strip()
+        unit_text = entities.get("UNIT", "").strip()
+
+        # Parse quantity
+        try:
+            if "/" in qty_text:
+                num, denom = qty_text.split("/")
+                quantity = float(num) / float(denom)
             else:
-                # Simple split fallback
-                extracted_items.append({
-                    "product": line.title(),
-                    "quantity": 1.0,
-                    "unit": "piece"
-                })
-                
-    return extracted_items
+                quantity = float(re.sub(r"[^\d./]", "", qty_text) or "1")
+        except ValueError:
+            quantity = 1.0
+
+        unit = normalize_unit(unit_text)
+
+        if product:
+            items.append({
+                "product": product.title(),
+                "quantity": quantity,
+                "unit": unit,
+            })
+        else:
+            # NER found nothing useful — fall back to regex for this line
+            fallback = regex_extract(line)
+            items.extend(fallback)
+
+    return items
+
+
+def generic_spacy_extract(nlp_model, text: str) -> list:
+    """
+    Use the generic en_core_web_sm model (noun-based POS tagging).
+    Combined with regex for quantity/unit extraction.
+    """
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    items = []
+
+    units_pattern = "|".join(sorted(UNITS_LIST, key=len, reverse=True))
+    qty_pattern = re.compile(
+        r"([\d./]+)\s*(" + units_pattern + r")?",
+        re.IGNORECASE
+    )
+
+    for line in lines:
+        # Extract quantity+unit via regex
+        qty_m = qty_pattern.search(line)
+        quantity = 1.0
+        unit = "piece"
+        if qty_m:
+            try:
+                raw = qty_m.group(1)
+                quantity = float(raw.split("/")[0]) / float(raw.split("/")[1]) if "/" in raw else float(raw)
+            except ValueError:
+                quantity = 1.0
+            unit = normalize_unit(qty_m.group(2))
+
+        # Extract product name via spaCy noun detection
+        doc = nlp_model(line)
+        nouns = [t.text for t in doc if t.pos_ in ("NOUN", "PROPN", "ADJ") and not t.like_num]
+        if nouns:
+            product = " ".join(nouns).title()
+            items.append({"product": product, "quantity": quantity, "unit": unit})
+        else:
+            # Fallback: strip numbers from line
+            product = re.sub(r"[\d./]+\s*(" + units_pattern + r")?", "", line, flags=re.IGNORECASE).strip().title()
+            if product:
+                items.append({"product": product, "quantity": quantity, "unit": unit})
+
+    return items
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PUBLIC API
+# ─────────────────────────────────────────────────────────────────────────────
+def extract_entities(text: str) -> list:
+    """
+    Main function: extracts (Product, Quantity, Unit) from grocery order text.
+
+    Returns a list of dicts:
+        [{'product': 'Rice', 'quantity': 2.0, 'unit': 'kg'}, ...]
+    """
+    if not text or not text.strip():
+        return []
+
+    nlp_model, model_type = load_spacy_model()
+
+    if model_type == "custom_ner":
+        logger.debug("Using custom retail NER model")
+        return custom_ner_extract(nlp_model, text)
+    elif model_type == "generic":
+        logger.debug("Using generic en_core_web_sm model")
+        return generic_spacy_extract(nlp_model, text)
+    else:
+        logger.debug("Using regex-only fallback")
+        return regex_extract(text)

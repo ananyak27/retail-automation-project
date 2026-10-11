@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Retail Automate",
+    "slug": "retail-automate-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#1e1b4b"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#1e1b4b"
+      },
+      "package": "com.retailautomate.app"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Retail Automate to access your photos to upload shopping lists."
+        }
+      ]
+    ],
+    "scheme": "retailautomate"
+  }
+}
