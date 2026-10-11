@@ -334,7 +334,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
               <h3 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)' }}>
                 <User size={18} /> 1. PERSONAL INFORMATION
               </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div className="form-grid-2">
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Owner Name *</label>
                   <input
@@ -365,7 +365,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
               <h3 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)' }}>
                 <Store size={18} /> 2. BUSINESS INFORMATION
               </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+              <div className="form-grid-2">
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Shop Name *</label>
                   <input
@@ -396,7 +396,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
               <h3 style={{ fontSize: '15px', fontWeight: '600', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--primary)' }}>
                 <CreditCard size={18} /> 3. PAYMENT INFORMATION
               </h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
+              <div className="form-grid-2" style={{ marginBottom: '16px' }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Bank Account Holder Name *</label>
                   <input
@@ -420,7 +420,7 @@ export default function OwnerRegister({ onLoginSuccess, onBackToLogin, backendUr
                   />
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+              <div className="form-grid-3">
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Account Number *</label>
                   <input

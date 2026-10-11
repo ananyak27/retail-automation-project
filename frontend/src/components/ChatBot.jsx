@@ -630,14 +630,14 @@ export default function ChatBot({ session, backendUrl }) {
           {/* Interactive Order Editing Card */}
           {extractedItems && (
             <div className="order-extraction-card" style={{ borderColor: 'var(--primary)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                 <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', margin: 0, color: 'var(--primary)' }}>
                   <ShoppingBag size={16} /> Edit & Review Order Items
                 </h4>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', maxWidth: '100%' }}>
                   <select
                     className="suggestions-select"
-                    style={{ padding: '4px 8px', fontSize: '12px' }}
+                    style={{ padding: '4px 8px', fontSize: '12px', maxWidth: '100%' }}
                     value=""
                     onChange={(e) => {
                       if (e.target.value) {
@@ -654,8 +654,8 @@ export default function ChatBot({ session, backendUrl }) {
                 </div>
               </div>
 
-              <div style={{ overflowX: 'auto' }}>
-                <table className="premium-table" style={{ fontSize: '12px', marginBottom: '10px' }}>
+              <div className="table-responsive">
+                <table className="premium-table order-items-table" style={{ fontSize: '12px', marginBottom: '10px' }}>
                   <thead>
                     <tr>
                       <th>Item Name</th>
@@ -739,12 +739,12 @@ export default function ChatBot({ session, backendUrl }) {
               </div>
 
               {/* Automatic Grand Total */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--surface-border)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--surface-border)', flexWrap: 'wrap', gap: '10px' }}>
                 <span style={{ fontSize: '14px', fontWeight: '800' }}>
                   Grand Total: ₹{extractedItems.reduce((sum, i) => sum + ((parseFloat(i.quantity) || 0) * (i.matched_product_price || 0)), 0).toFixed(2)}
                 </span>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button className="btn-primary" style={{ padding: '8px 16px', fontSize: '13px' }} onClick={handleCreateDraftOrder}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button className="btn-primary" style={{ padding: '8px 16px', fontSize: '13px', width: 'auto' }} onClick={handleCreateDraftOrder}>
                     Confirm Order & Send to Owner
                   </button>
                   <button
@@ -808,8 +808,8 @@ export default function ChatBot({ session, backendUrl }) {
                   <div style={{ fontWeight: '700', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
                     📦 Ordered Items:
                   </div>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table className="premium-table" style={{ width: '100%', fontSize: '12px', marginBottom: '8px' }}>
+                  <div className="table-responsive">
+                    <table className="premium-table order-items-table" style={{ width: '100%', fontSize: '12px', marginBottom: '8px' }}>
                       <thead>
                         <tr>
                           <th style={{ textAlign: 'left', padding: '6px 8px' }}>Product</th>
@@ -844,7 +844,7 @@ export default function ChatBot({ session, backendUrl }) {
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid var(--surface-border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid var(--surface-border)', flexWrap: 'wrap', gap: '8px' }}>
                   <span style={{ fontSize: '14px', fontWeight: '800', color: 'var(--text-primary)' }}>
                     Total: ₹{ord.total_amount?.toFixed(2)}
                   </span>
@@ -858,17 +858,17 @@ export default function ChatBot({ session, backendUrl }) {
                         💵 Cash Payment Selected (Status: Cash Pending). Please pay ₹{ord.total_amount?.toFixed(2)} directly to shop owner.
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', gap: '8px' }}>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                         <button
                           className="btn-primary"
-                          style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--secondary)' }}
+                          style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--secondary)', width: 'auto' }}
                           onClick={() => handleInitiatePaymentForOrder(ord, 'razorpay')}
                         >
                           Pay Online (Razorpay)
                         </button>
                         <button
                           className="btn-logout"
-                          style={{ padding: '6px 12px', fontSize: '12px', borderColor: 'var(--text-secondary)' }}
+                          style={{ padding: '6px 12px', fontSize: '12px', borderColor: 'var(--text-secondary)', width: 'auto' }}
                           onClick={() => handleInitiatePaymentForOrder(ord, 'cash')}
                         >
                           Pay Cash at Shop
@@ -950,7 +950,7 @@ export default function ChatBot({ session, backendUrl }) {
             onChange={handleImageUpload}
           />
 
-          <form onSubmit={handleSendText} style={{ display: 'flex', flex: 1, gap: '8px' }}>
+          <form onSubmit={handleSendText} className="chat-input-form" style={{ display: 'flex', flex: 1, gap: '8px', minWidth: 0 }}>
             <input
               type="text"
               className="chat-text-area"

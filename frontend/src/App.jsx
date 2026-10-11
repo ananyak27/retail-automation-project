@@ -60,8 +60,8 @@ export default function App() {
         {session && (
           <div className="user-nav">
             <div className="user-badge">
-              {session.role === 'owner' ? '🏪 Shop Owner' : '👨‍💼 Customer'}
-              <span style={{ fontSize: '11px', opacity: 0.8, marginLeft: '4px' }}>
+              <span>{session.role === 'owner' ? '🏪 Shop Owner' : '👨‍💼 Customer'}</span>
+              <span className="user-phone">
                 ({session.phone_number})
               </span>
             </div>

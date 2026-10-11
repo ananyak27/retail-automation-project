@@ -1291,13 +1291,13 @@ export default function OwnerDashboard({ session, backendUrl }) {
         {/* Tab content 3: Forecasting dashboard */}
         {activeTab === 'forecast' && (
           <div className="card-content">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
               <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 📈 Meta Prophet Demand Forecasting
               </h3>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary)' }}>Select Product:</span>
-                <div style={{ position: 'relative', width: '220px' }}>
+                <div style={{ position: 'relative', width: '220px', maxWidth: '100%' }}>
                   <input
                     type="text"
                     className="form-input"
@@ -1499,7 +1499,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               <h4 style={{ fontSize: '14px', color: 'var(--primary)', marginBottom: '14px', fontWeight: '600', letterSpacing: '0.5px' }}>
                 BUSINESS INFORMATION
               </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '14px' }}>
+              <div className="form-grid-2" style={{ fontSize: '14px' }}>
                 <div>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>Shop Name</span>
                   <strong>{shop?.name || 'N/A'}</strong>
@@ -1516,7 +1516,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               <h4 style={{ fontSize: '14px', color: 'var(--primary)', marginBottom: '14px', fontWeight: '600', letterSpacing: '0.5px' }}>
                 PAYMENT INFORMATION
               </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px', fontSize: '14px' }}>
+              <div className="form-grid-2" style={{ marginBottom: '16px', fontSize: '14px' }}>
                 <div>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>Bank Account Holder Name</span>
                   <strong>{ownerProfile?.bank_account_holder_name || 'N/A'}</strong>
@@ -1526,7 +1526,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
                   <strong>{ownerProfile?.bank_name || 'N/A'}</strong>
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', fontSize: '14px' }}>
+              <div className="form-grid-3" style={{ fontSize: '14px' }}>
                 <div>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>Masked Account Number</span>
                   <strong>
@@ -1782,7 +1782,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               <button className="btn-close-modal" onClick={() => setViewingOrderModal(null)}>✕</button>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', backgroundColor: 'var(--background)', padding: '14px', borderRadius: 'var(--radius-sm)', marginBottom: '16px', fontSize: '13px' }}>
+            <div className="form-grid-2" style={{ backgroundColor: 'var(--background)', padding: '14px', borderRadius: 'var(--radius-sm)', marginBottom: '16px', fontSize: '13px' }}>
               <div>
                 <strong>Customer Name:</strong> {viewingOrderModal.customer_name || 'Customer'}
               </div>
