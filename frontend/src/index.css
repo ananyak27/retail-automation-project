@@ -491,15 +491,15 @@ button, input, select, textarea {
   background-color: var(--surface);
 }
 
-/* Chat Interface CSS */
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: 600px;
+  min-height: 600px;
+  height: auto;
+  max-height: calc(100vh - 100px);
   background-color: var(--surface);
   border: 1px solid var(--surface-border);
   border-radius: var(--radius-md);
-  overflow: hidden;
   box-shadow: var(--shadow-lg);
   width: 100%;
   min-width: 0;
@@ -524,6 +524,39 @@ button, input, select, textarea {
   font-size: 16px;
   font-weight: 700;
   word-break: break-word;
+}
+
+.chat-tab-group {
+  display: flex;
+  gap: 4px;
+  background-color: var(--background);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--surface-border);
+}
+
+.chat-tab-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chat-tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.chat-tab-btn.active {
+  background-color: var(--primary);
+  color: white;
 }
 
 .chat-messages {
@@ -636,18 +669,19 @@ button, input, select, textarea {
   background-color: var(--primary-hover);
 }
 
-/* Custom list items parser overlay UI */
 .order-extraction-card {
   border: 1.5px solid var(--primary-light);
   border-radius: var(--radius-sm);
   background-color: var(--surface);
-  padding: 14px;
+  padding: 16px;
   margin-top: 10px;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: visible;
+  flex-shrink: 0;
+  height: auto;
 }
 
 .order-item-row {
@@ -700,16 +734,25 @@ button, input, select, textarea {
   width: 100%;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: visible;
   -webkit-overflow-scrolling: touch;
-  margin-top: 8px;
-  margin-bottom: 8px;
+  margin-top: 10px;
+  margin-bottom: 10px;
   border-radius: var(--radius-sm);
+  border: 1px solid var(--surface-border);
+  background-color: var(--surface);
+}
+
+.order-items-table {
+  width: 100%;
+  min-width: 440px;
+  border-collapse: collapse;
 }
 
 .premium-table {
   width: 100%;
   border-collapse: collapse;
-  margin-top: 10px;
+  margin-top: 0;
 }
 
 .premium-table th {
@@ -1119,8 +1162,9 @@ button, input, select, textarea {
   }
 
   .chat-container {
-    height: 560px;
-    max-height: 82vh;
+    min-height: 540px;
+    height: auto;
+    max-height: 88vh;
     width: 100%;
     min-width: 0;
   }
@@ -1222,7 +1266,9 @@ button, input, select, textarea {
   }
 
   .chat-container {
-    height: 520px;
+    min-height: 500px;
+    height: auto;
+    max-height: 92vh;
   }
 
   .chat-header {

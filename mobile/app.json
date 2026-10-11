@@ -14,7 +14,10 @@
       "adaptiveIcon": {
         "backgroundColor": "#1e1b4b"
       },
-      "package": "com.retailautomate.app"
+      "package": "com.retailautomate.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "plugins": [
       [
@@ -22,8 +25,14 @@
         {
           "photosPermission": "Allow Retail Automate to access your photos to upload shopping lists."
         }
-      ]
+      ],
+      "expo-font"
     ],
-    "scheme": "retailautomate"
+    "scheme": "retailautomate",
+    "extra": {
+      "eas": {
+        "projectId": "5afd994a-c38d-4de8-b5b6-7519009ececd"
+      }
+    }
   }
 }
