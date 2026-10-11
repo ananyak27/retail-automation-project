@@ -10,6 +10,7 @@ export default function ChatBot({ session, backendUrl }) {
   const [shopCatalog, setShopCatalog] = useState([]);
   const [catalogSearchQuery, setCatalogSearchQuery] = useState('');
   const [customerOrders, setCustomerOrders] = useState([]);
+  const [messages, setMessages] = useState([]);
 
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -39,6 +40,10 @@ export default function ChatBot({ session, backendUrl }) {
     currentOrderRef.current = currentOrder;
   }, [currentOrder]);
 
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, extractedItems, currentOrder, loading]);
+
   const fetchCustomerOrders = async () => {
     if (!session?.access_token) return;
     try {
@@ -48,6 +53,12 @@ export default function ChatBot({ session, backendUrl }) {
       if (res.ok) {
         const data = await res.json();
         setCustomerOrders(data);
+        if (currentOrderRef.current) {
+          const updated = data.find(o => o.id === currentOrderRef.current.id);
+          if (updated) {
+            setCurrentOrder(updated);
+          }
+        }
       }
     } catch (err) {
       console.error("Error fetching customer orders:", err);
@@ -93,6 +104,15 @@ export default function ChatBot({ session, backendUrl }) {
         try {
           const data = JSON.parse(event.data);
           console.log("[ChatBot] WebSocket message received:", data);
+
+          if (data.type === 'chat_message' && data.data) {
+            if (data.data.shop_id === selectedShopRef.current?.id) {
+              setMessages(prev => {
+                if (prev.some(m => m.id === data.data.id)) return prev;
+                return [...prev, data.data];
+              });
+            }
+          }
 
           if (data.type === 'order_reviewed' || data.type === 'order_rejected' || data.type === 'order_deleted') {
             fetchCustomerOrders();
@@ -213,6 +233,21 @@ export default function ChatBot({ session, backendUrl }) {
     }
   };
 
+  const fetchChatMessages = async (shopId) => {
+    if (!session?.access_token || !shopId) return;
+    try {
+      const res = await fetch(`${backendUrl}/api/chat/messages?shop_id=${shopId}`, {
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(data);
+      }
+    } catch (err) {
+      console.error("Error fetching chat messages:", err);
+    }
+  };
+
   const handleShopSelect = (shop) => {
     setSelectedShop(shop);
     selectedShopRef.current = shop;
@@ -220,6 +255,7 @@ export default function ChatBot({ session, backendUrl }) {
     setExtractedItems(null);
     fetchShopCatalog(shop.id);
     fetchCustomerOrders();
+    fetchChatMessages(shop.id);
   };
 
   const handleAddCatalogProductToOrder = (productId) => {
@@ -296,6 +332,14 @@ export default function ChatBot({ session, backendUrl }) {
 
     const text = inputText;
     setInputText('');
+
+    const userMsg = {
+      id: Date.now(),
+      sender_role: 'customer',
+      message: text,
+      created_at: new Date().toISOString()
+    };
+    setMessages(prev => [...prev, userMsg]);
     saveChatMessage(selectedShop.id, 'customer', text);
     setLoading(true);
 
@@ -312,6 +356,17 @@ export default function ChatBot({ session, backendUrl }) {
       if (res.ok) {
         const data = await res.json();
         setExtractedItems(data.extracted_items);
+        const count = data.extracted_items?.length || 0;
+        const botReply = {
+          id: Date.now() + 1,
+          sender_role: 'bot',
+          message: count > 0
+            ? `I extracted ${count} item(s) from your shopping list! Please review and adjust the order draft below.`
+            : `I could not recognize items from your request. Please try typing item names like "2kg rice, 1 milk" or choose products from the Shop Products sidebar.`,
+          created_at: new Date().toISOString()
+        };
+        setMessages(prev => [...prev, botReply]);
+        saveChatMessage(selectedShop.id, 'bot', botReply.message);
       }
     } catch (err) {
       console.error(err);
@@ -324,7 +379,15 @@ export default function ChatBot({ session, backendUrl }) {
     const file = e.target.files[0];
     if (!file || !selectedShop) return;
 
-    saveChatMessage(selectedShop.id, 'customer', `📷 Uploaded shopping list image: ${file.name}`);
+    const uploadText = `📷 Uploaded shopping list image: ${file.name}`;
+    const userMsg = {
+      id: Date.now(),
+      sender_role: 'customer',
+      message: uploadText,
+      created_at: new Date().toISOString()
+    };
+    setMessages(prev => [...prev, userMsg]);
+    saveChatMessage(selectedShop.id, 'customer', uploadText);
     setLoading(true);
 
     try {
@@ -340,6 +403,17 @@ export default function ChatBot({ session, backendUrl }) {
       if (res.ok) {
         const data = await res.json();
         setExtractedItems(data.extracted_items);
+        const count = data.extracted_items?.length || 0;
+        const botReply = {
+          id: Date.now() + 1,
+          sender_role: 'bot',
+          message: count > 0
+            ? `Extracted ${count} item(s) from your handwritten image! Please review and confirm your order draft below.`
+            : `Could not clearly detect items in the image. Please try uploading a clearer image or type the items.`,
+          created_at: new Date().toISOString()
+        };
+        setMessages(prev => [...prev, botReply]);
+        saveChatMessage(selectedShop.id, 'bot', botReply.message);
       }
     } catch (err) {
       console.error(err);
@@ -381,6 +455,14 @@ export default function ChatBot({ session, backendUrl }) {
         setCurrentOrder(orderData);
         setExtractedItems(null);
         await fetchCustomerOrders();
+        const botReply = {
+          id: Date.now() + 2,
+          sender_role: 'bot',
+          message: `🎉 Order #${orderData.order_number || orderData.id} has been created and sent to the shop owner! Total: ₹${orderData.total_amount?.toFixed(2)}.`,
+          created_at: new Date().toISOString()
+        };
+        setMessages(prev => [...prev, botReply]);
+        saveChatMessage(selectedShop.id, 'bot', botReply.message);
       }
     } catch (err) {
       console.error(err);
@@ -594,10 +676,6 @@ export default function ChatBot({ session, backendUrl }) {
     p.name.toLowerCase().includes(catalogSearchQuery.trim().toLowerCase())
   );
 
-  const displayOrders = selectedShop
-    ? customerOrders.filter(o => o.shop_id === selectedShop.id)
-    : [];
-
   return (
     <div className="customer-layout-wrapper">
       {/* Main Chat / Orders Window */}
@@ -759,168 +837,212 @@ export default function ChatBot({ session, backendUrl }) {
             </div>
           )}
 
-          {/* Structured Order Cards List */}
-          {!selectedShop ? (
+          {/* Conversation Messages */}
+          {selectedShop && (
+            messages.length === 0 ? (
+              <div className="chat-bubble bot" style={{ alignSelf: 'flex-start', maxWidth: '85%' }}>
+                <div>
+                  👋 Welcome to <strong>{selectedShop.name}</strong>! You can chat with me, type your grocery list (e.g. <em>2kg Rice, 1 Milk</em>), upload a picture of a handwritten list, or select items from <strong>Shop Products</strong> on the right to start an order.
+                </div>
+              </div>
+            ) : (
+              messages.map((m, idx) => (
+                <div
+                  key={m.id || idx}
+                  className={`chat-bubble ${m.sender_role === 'customer' || m.sender_role === 'user' ? 'user' : 'bot'}`}
+                  style={{
+                    alignSelf: m.sender_role === 'customer' || m.sender_role === 'user' ? 'flex-end' : 'flex-start',
+                    maxWidth: '85%'
+                  }}
+                >
+                  <div>{m.message}</div>
+                  {m.created_at && (
+                    <div style={{
+                      fontSize: '10px',
+                      opacity: 0.7,
+                      marginTop: '4px',
+                      textAlign: m.sender_role === 'customer' || m.sender_role === 'user' ? 'right' : 'left'
+                    }}>
+                      {formatDateTime(m.created_at)}
+                    </div>
+                  )}
+                </div>
+              ))
+            )
+          )}
+
+          {!selectedShop && (
             <div style={{ padding: '60px 20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
               <Store size={48} style={{ opacity: 0.4, marginBottom: '12px' }} />
               <h3 style={{ fontSize: '16px', color: 'var(--text-primary)', marginBottom: '6px' }}>No Shop Selected</h3>
               <p style={{ fontSize: '13px', margin: 0 }}>Please select a shop from the dropdown above to view products and place an order.</p>
             </div>
-          ) : displayOrders.length === 0 ? (
-            <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-              <p style={{ fontSize: '14px', margin: 0 }}>No orders placed at {selectedShop.name} yet.</p>
-              <p style={{ fontSize: '12px', marginTop: '6px' }}>Type your shopping list below or click "+ Add" from the product sidebar to start an order.</p>
-            </div>
-          ) : (
-            displayOrders.map(ord => (
-              <div
-                key={ord.id}
-                className="order-extraction-card"
-                style={{
-                  marginBottom: '0',
-                  borderColor: ord.payment_status === 'paid' ? '#10b981' : 'var(--primary)'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <span style={{ fontWeight: '800', fontSize: '15px', color: 'var(--primary)' }}>
-                    Order #{ord.order_number || ord.id}
-                  </span>
+          )}
+
+          {/* Current Newly Created / Active Order Card */}
+          {currentOrder && (
+            <div
+              className="order-extraction-card"
+              style={{
+                marginBottom: '0',
+                borderColor: currentOrder.payment_status === 'paid' ? '#10b981' : 'var(--primary)'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+                <span style={{ fontWeight: '800', fontSize: '15px', color: 'var(--primary)' }}>
+                  Current Order #{currentOrder.order_number || currentOrder.id}
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                    {formatDateTime(ord.created_at)}
+                    {formatDateTime(currentOrder.created_at)}
                   </span>
+                  <button
+                    type="button"
+                    className="btn-logout"
+                    style={{ padding: '2px 8px', fontSize: '11px' }}
+                    onClick={() => setCurrentOrder(null)}
+                    title="Close current order card"
+                  >
+                    ✕ Close Card
+                  </button>
                 </div>
+              </div>
 
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-                  <span className={`badge-status ${ord.status}`} style={{ fontSize: '11px', textTransform: 'capitalize' }}>
-                    Status: {ord.status ? ord.status.replace('_', ' ') : 'Pending'}
-                  </span>
-                  <span className="badge-status pending" style={{
-                    fontSize: '11px',
-                    textTransform: 'capitalize',
-                    backgroundColor: ord.payment_status === 'paid' ? '#d4edda' : '#fff3cd',
-                    color: ord.payment_status === 'paid' ? '#155724' : '#856404'
-                  }}>
-                    Payment: {ord.payment_status ? ord.payment_status.replace('_', ' ') : 'Not Paid'}
-                  </span>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                <span className={`badge-status ${currentOrder.status}`} style={{ fontSize: '11px', textTransform: 'capitalize' }}>
+                  Status: {currentOrder.status ? currentOrder.status.replace('_', ' ') : 'Pending'}
+                </span>
+                <span className="badge-status pending" style={{
+                  fontSize: '11px',
+                  textTransform: 'capitalize',
+                  backgroundColor: currentOrder.payment_status === 'paid' ? '#d4edda' : '#fff3cd',
+                  color: currentOrder.payment_status === 'paid' ? '#155724' : '#856404'
+                }}>
+                  Payment: {currentOrder.payment_status ? currentOrder.payment_status.replace('_', ' ') : 'Not Paid'}
+                </span>
+              </div>
+
+              <div style={{ margin: '10px 0' }}>
+                <div style={{ fontWeight: '700', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                  📦 Ordered Items:
                 </div>
-
-                <div style={{ margin: '10px 0' }}>
-                  <div style={{ fontWeight: '700', fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                    📦 Ordered Items:
-                  </div>
-                  <div className="table-responsive">
-                    <table className="premium-table order-items-table" style={{ width: '100%', fontSize: '12px', marginBottom: '8px' }}>
-                      <thead>
+                <div className="table-responsive">
+                  <table className="premium-table order-items-table" style={{ width: '100%', fontSize: '12px', marginBottom: '8px' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Product</th>
+                        <th style={{ textAlign: 'center', padding: '6px 8px' }}>Quantity</th>
+                        <th style={{ textAlign: 'right', padding: '6px 8px' }}>Price / Unit</th>
+                        <th style={{ textAlign: 'right', padding: '6px 8px' }}>Item Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {currentOrder.items && currentOrder.items.length > 0 ? (
+                        currentOrder.items.map((it, idx) => {
+                          const price = it.price_at_order || 0;
+                          const itemTotal = (it.quantity || 0) * price;
+                          return (
+                            <tr key={it.id || idx}>
+                              <td style={{ fontWeight: '600', padding: '6px 8px' }}>{it.product_name}</td>
+                              <td style={{ textAlign: 'center', padding: '6px 8px' }}>{it.quantity} {it.unit || ''}</td>
+                              <td style={{ textAlign: 'right', padding: '6px 8px' }}>₹{price.toFixed(2)}</td>
+                              <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--primary)', padding: '6px 8px' }}>
+                                ₹{itemTotal.toFixed(2)}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
                         <tr>
-                          <th style={{ textAlign: 'left', padding: '6px 8px' }}>Product</th>
-                          <th style={{ textAlign: 'center', padding: '6px 8px' }}>Quantity</th>
-                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Price / Unit</th>
-                          <th style={{ textAlign: 'right', padding: '6px 8px' }}>Item Total</th>
+                          <td colSpan="4" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '8px' }}>No items</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {ord.items && ord.items.length > 0 ? (
-                          ord.items.map((it, idx) => {
-                            const price = it.price_at_order || 0;
-                            const itemTotal = (it.quantity || 0) * price;
-                            return (
-                              <tr key={it.id || idx}>
-                                <td style={{ fontWeight: '600', padding: '6px 8px' }}>{it.product_name}</td>
-                                <td style={{ textAlign: 'center', padding: '6px 8px' }}>{it.quantity} {it.unit || ''}</td>
-                                <td style={{ textAlign: 'right', padding: '6px 8px' }}>₹{price.toFixed(2)}</td>
-                                <td style={{ textAlign: 'right', fontWeight: '700', color: 'var(--primary)', padding: '6px 8px' }}>
-                                  ₹{itemTotal.toFixed(2)}
-                                </td>
-                              </tr>
-                            );
-                          })
-                        ) : (
-                          <tr>
-                            <td colSpan="4" style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '8px' }}>No items</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
+              </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid var(--surface-border)', flexWrap: 'wrap', gap: '8px' }}>
-                  <span style={{ fontSize: '14px', fontWeight: '800', color: 'var(--text-primary)' }}>
-                    Total: ₹{ord.total_amount?.toFixed(2)}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '8px', borderTop: '1px solid var(--surface-border)', flexWrap: 'wrap', gap: '8px' }}>
+                <span style={{ fontSize: '14px', fontWeight: '800', color: 'var(--text-primary)' }}>
+                  Total: ₹{currentOrder.total_amount?.toFixed(2)}
+                </span>
+                {currentOrder.payment_status === 'paid' && (
+                  <span style={{ fontSize: '12px', fontWeight: '700', color: '#10b981' }}>
+                    ✓ Paid Successfully
                   </span>
-                </div>
-
-                {/* Payment Action Buttons for Unpaid Orders */}
-                {ord.payment_status !== 'paid' && ord.status !== 'rejected' && ord.status !== 'deleted' && (
-                  <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px dashed var(--surface-border)' }}>
-                    {ord.payment_status === 'cash_pending' || ord.payment_method === 'cash' ? (
-                      <div style={{ backgroundColor: '#fff3cd', color: '#856404', padding: '8px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
-                        💵 Cash Payment Selected (Status: Cash Pending). Please pay ₹{ord.total_amount?.toFixed(2)} directly to shop owner.
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                        <button
-                          className="btn-primary"
-                          style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--secondary)', width: 'auto' }}
-                          onClick={() => handleInitiatePaymentForOrder(ord, 'razorpay')}
-                        >
-                          Pay Online (Razorpay)
-                        </button>
-                        <button
-                          className="btn-logout"
-                          style={{ padding: '6px 12px', fontSize: '12px', borderColor: 'var(--text-secondary)', width: 'auto' }}
-                          onClick={() => handleInitiatePaymentForOrder(ord, 'cash')}
-                        >
-                          Pay Cash at Shop
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Razorpay Payment / QR Box */}
-                    {showPayment && paymentDetails && activePaymentOrderId === ord.id && (
-                      <div className="qr-modal" style={{ marginTop: '12px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <h4 style={{ fontSize: '13px', margin: 0 }}>📱 Pay Online via Razorpay</h4>
-                          <button
-                            type="button"
-                            className="btn-logout"
-                            style={{ padding: '2px 8px', fontSize: '11px' }}
-                            onClick={() => {
-                              setShowPayment(false);
-                              setActivePaymentOrderId(null);
-                              setPaymentDetails(null);
-                            }}
-                          >
-                            Close
-                          </button>
-                        </div>
-                        <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--primary)', marginTop: '4px' }}>₹{paymentDetails.amount}</div>
-
-                        {paymentDetails.upi_uri && (
-                          <img
-                            src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(paymentDetails.upi_uri)}`}
-                            alt="Razorpay Test QR"
-                            style={{ margin: '10px 0', border: '1px solid var(--surface-border)', padding: '4px', borderRadius: '4px' }}
-                          />
-                        )}
-
-                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
-                          Razorpay Order ID: <span style={{ fontFamily: 'monospace' }}>{paymentDetails.razorpay_order_id}</span>
-                        </p>
-
-                        <button
-                          className="btn-primary"
-                          style={{ width: '100%', fontSize: '12px' }}
-                          onClick={() => handleSimulatePaymentForOrder(ord)}
-                        >
-                          Simulate Razorpay Payment Success (Demo)
-                        </button>
-                      </div>
-                    )}
-                  </div>
                 )}
               </div>
-            ))
+
+              {/* Payment Action Buttons for Unpaid Orders */}
+              {currentOrder.payment_status !== 'paid' && currentOrder.status !== 'rejected' && currentOrder.status !== 'deleted' && (
+                <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px dashed var(--surface-border)' }}>
+                  {currentOrder.payment_status === 'cash_pending' || currentOrder.payment_method === 'cash' ? (
+                    <div style={{ backgroundColor: '#fff3cd', color: '#856404', padding: '8px 12px', borderRadius: '4px', fontSize: '12px', fontWeight: '600' }}>
+                      💵 Cash Payment Selected (Status: Cash Pending). Please pay ₹{currentOrder.total_amount?.toFixed(2)} directly to shop owner.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        className="btn-primary"
+                        style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--secondary)', width: 'auto' }}
+                        onClick={() => handleInitiatePaymentForOrder(currentOrder, 'razorpay')}
+                      >
+                        Pay Online (Razorpay)
+                      </button>
+                      <button
+                        className="btn-logout"
+                        style={{ padding: '6px 12px', fontSize: '12px', borderColor: 'var(--text-secondary)', width: 'auto' }}
+                        onClick={() => handleInitiatePaymentForOrder(currentOrder, 'cash')}
+                      >
+                        Pay Cash at Shop
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Razorpay Payment / QR Box */}
+                  {showPayment && paymentDetails && activePaymentOrderId === currentOrder.id && (
+                    <div className="qr-modal" style={{ marginTop: '12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h4 style={{ fontSize: '13px', margin: 0 }}>📱 Pay Online via Razorpay</h4>
+                        <button
+                          type="button"
+                          className="btn-logout"
+                          style={{ padding: '2px 8px', fontSize: '11px' }}
+                          onClick={() => {
+                            setShowPayment(false);
+                            setActivePaymentOrderId(null);
+                            setPaymentDetails(null);
+                          }}
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <div style={{ fontSize: '15px', fontWeight: '800', color: 'var(--primary)', marginTop: '4px' }}>₹{paymentDetails.amount}</div>
+
+                      {paymentDetails.upi_uri && (
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(paymentDetails.upi_uri)}`}
+                          alt="Razorpay Test QR"
+                          style={{ margin: '10px 0', border: '1px solid var(--surface-border)', padding: '4px', borderRadius: '4px' }}
+                        />
+                      )}
+
+                      <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+                        Razorpay Order ID: <span style={{ fontFamily: 'monospace' }}>{paymentDetails.razorpay_order_id}</span>
+                      </p>
+
+                      <button
+                        className="btn-primary"
+                        style={{ width: '100%', fontSize: '12px' }}
+                        onClick={() => handleSimulatePaymentForOrder(currentOrder)}
+                      >
+                        Simulate Razorpay Payment Success (Demo)
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           )}
 
           {loading && (
