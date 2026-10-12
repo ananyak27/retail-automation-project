@@ -51,6 +51,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
   const [reviewItems, setReviewItems] = useState([]);
   const [reviewNotes, setReviewNotes] = useState('');
   const [viewingOrderModal, setViewingOrderModal] = useState(null);
+  const [orderViewMode, setOrderViewMode] = useState('table'); // 'table' or 'cards'
 
   // Selected product for Prophet forecasting
   const [selectedForecastProduct, setSelectedForecastProduct] = useState('');
@@ -840,7 +841,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
     <div className="dashboard-grid">
       {/* Sidebar Navigation */}
       <div className="sidebar">
-        <div style={{ paddingBottom: '16px', borderBottom: '1px solid var(--surface-border)', marginBottom: '10px' }}>
+        <div className="sidebar-header" style={{ paddingBottom: '16px', borderBottom: '1px solid var(--surface-border)', marginBottom: '10px' }}>
           <h3 style={{ fontSize: '18px' }}>🏪 {shop.name}</h3>
           <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Shop ID: {shop.id}</span>
         </div>
@@ -881,7 +882,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
         </button>
         
         {unreadAlertsCount > 0 && (
-          <div style={{ marginTop: 'auto', backgroundColor: 'var(--error-light)', padding: '12px', borderRadius: 'var(--radius-sm)', borderLeft: '4px solid var(--error)', fontSize: '12px', color: 'var(--error)' }}>
+          <div className="sidebar-alert-card" style={{ marginTop: 'auto', backgroundColor: 'var(--error-light)', padding: '12px', borderRadius: 'var(--radius-sm)', borderLeft: '4px solid var(--error)', fontSize: '12px', color: 'var(--error)' }}>
             <strong>
               {alerts.some(a => !a.is_read && a.type === 'low_stock') ? '⚠️ ' : '🔔 '}
               {unreadAlertsCount} Unread Alert{unreadAlertsCount > 1 ? 's' : ''} pending!
@@ -891,7 +892,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
       </div>
 
       {/* Main Panel */}
-      <div>
+      <div className="dashboard-main-panel">
         {/* Alerts Banner */}
         {alerts.filter(a => !a.is_read).map(a => (
           <div key={a.id} className={`alert-banner ${a.type}`}>
@@ -934,15 +935,109 @@ export default function OwnerDashboard({ session, backendUrl }) {
         {/* Tab content 1: Orders and Cash confirmation */}
         {activeTab === 'orders' && !reviewOrder && (
           <div className="card-content">
-            <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              📦 Orders Waiting Action
-            </h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                📦 Orders Waiting Action
+              </h3>
+
+              {orders.length > 0 && (
+                <div className="order-view-toggle">
+                  <button 
+                    type="button"
+                    className={`btn-mode ${orderViewMode === 'table' ? 'active' : ''}`}
+                    onClick={() => setOrderViewMode('table')}
+                    style={{ padding: '5px 10px', fontSize: '12px' }}
+                  >
+                    📊 Scrollable Table
+                  </button>
+                  <button 
+                    type="button"
+                    className={`btn-mode ${orderViewMode === 'cards' ? 'active' : ''}`}
+                    onClick={() => setOrderViewMode('cards')}
+                    style={{ padding: '5px 10px', fontSize: '12px' }}
+                  >
+                    📱 Mobile Cards
+                  </button>
+                </div>
+              )}
+            </div>
             
             {orders.length === 0 ? (
               <p style={{ color: 'var(--text-secondary)', fontSize: '14px', textAlign: 'center', padding: '40px' }}>No orders placed yet.</p>
+            ) : orderViewMode === 'cards' ? (
+              <div className="mobile-orders-list">
+                {orders.map(o => (
+                  <div key={o.id} className="mobile-order-card">
+                    <div className="mobile-order-header">
+                      <span className="mobile-order-id">#{o.order_number || o.id}</span>
+                      <div>
+                        {o.payment_status === 'paid' ? (
+                          <span className="badge-status paid" style={{ fontSize: '11px' }}>Paid</span>
+                        ) : o.payment_method === 'cash' ? (
+                          <span className="badge-status pending" style={{ fontSize: '11px', backgroundColor: '#fff3cd', color: '#856404' }}>Cash Pending</span>
+                        ) : o.payment_method === 'razorpay' ? (
+                          <span className="badge-status pending" style={{ fontSize: '11px', backgroundColor: '#e2e3e5', color: '#383d41' }}>Online Pending</span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Pending</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mobile-order-details">
+                      <div className="mobile-order-detail-row">
+                        <span style={{ color: 'var(--text-secondary)' }}>Customer:</span>
+                        <strong style={{ textAlign: 'right' }}>{o.customer_name || 'Customer'}</strong>
+                      </div>
+                      <div className="mobile-order-detail-row">
+                        <span style={{ color: 'var(--text-secondary)' }}>Phone:</span>
+                        <span>{o.customer_phone || '-'}</span>
+                      </div>
+                      <div className="mobile-order-detail-row">
+                        <span style={{ color: 'var(--text-secondary)' }}>Total Amount:</span>
+                        <span className="mobile-order-amount">₹{o.total_amount?.toFixed(2)}</span>
+                      </div>
+                      <div className="mobile-order-detail-row">
+                        <span style={{ color: 'var(--text-secondary)' }}>Payment Method:</span>
+                        <span style={{ textTransform: 'capitalize' }}>{o.payment_method ? o.payment_method : 'Not Selected'}</span>
+                      </div>
+                      <div className="mobile-order-detail-row">
+                        <span style={{ color: 'var(--text-secondary)' }}>Received At:</span>
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{formatDateTime(o.created_at)}</span>
+                      </div>
+                    </div>
+
+                    <div className="mobile-order-actions">
+                      {o.payment_method === 'cash' && o.payment_status !== 'paid' && (
+                        <button 
+                          className="btn-primary" 
+                          style={{ padding: '6px 12px', fontSize: '12px', backgroundColor: 'var(--secondary)' }}
+                          onClick={() => handleConfirmCashPayment(o.id)}
+                        >
+                          Confirm Cash Paid
+                        </button>
+                      )}
+                      <button 
+                        className="btn-logout"
+                        style={{ padding: '6px 12px', fontSize: '12px' }}
+                        onClick={() => setViewingOrderModal(o)}
+                      >
+                        View Details
+                      </button>
+                      <button 
+                        className="btn-logout"
+                        style={{ padding: '6px 12px', fontSize: '12px', color: 'var(--error)', borderColor: 'var(--error)' }}
+                        onClick={() => handleDeleteOrder(o.id)}
+                      >
+                        Delete Order
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="premium-table">
+              <div className="table-responsive owner-table-wrapper">
+                <div className="table-scroll-hint">← Swipe sideways to view all order columns & actions →</div>
+                <table className="premium-table owner-orders-table">
                   <thead>
                     <tr>
                       <th>Order ID</th>
@@ -1142,7 +1237,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
                 </div>
               )}
 
-              <form onSubmit={handleAddProduct} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', alignItems: 'end' }}>
+              <form onSubmit={handleAddProduct} className="product-form-grid">
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">Product Name</label>
                   <div style={{ position: 'relative' }}>
@@ -1247,11 +1342,11 @@ export default function OwnerDashboard({ session, backendUrl }) {
                   placeholder="🔍 Search catalog products..."
                   value={catalogSearchQuery}
                   onChange={e => setCatalogSearchQuery(e.target.value)}
-                  style={{ maxWidth: '300px', padding: '8px 14px', fontSize: '13px' }}
+                  style={{ maxWidth: '300px', width: '100%', padding: '8px 14px', fontSize: '13px' }}
                 />
               </div>
 
-              <div style={{ overflowX: 'auto' }}>
+              <div className="table-responsive">
                 {filteredCatalogProducts.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-secondary)', fontSize: '14px' }}>
                     {catalogSearchQuery.trim()
@@ -1259,7 +1354,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
                       : 'No products in catalog.'}
                   </div>
                 ) : (
-                  <table className="premium-table">
+                  <table className="premium-table" style={{ minWidth: '520px' }}>
                     <thead>
                       <tr>
                         <th>Product</th>
@@ -1304,17 +1399,17 @@ export default function OwnerDashboard({ session, backendUrl }) {
         {/* Tab content 3: Forecasting dashboard */}
         {activeTab === 'forecast' && (
           <div className="card-content">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="forecast-header">
               <h3 style={{ fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 📈 Meta Prophet Demand Forecasting
               </h3>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div className="forecast-controls">
                 <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-secondary)' }}>Select Product:</span>
-                <div style={{ position: 'relative', width: '220px' }}>
+                <div className="forecast-input-wrap">
                   <input
                     type="text"
                     className="form-input"
-                    style={{ padding: '6px 12px', fontSize: '13px' }}
+                    style={{ padding: '8px 12px', fontSize: '13px', width: '100%' }}
                     placeholder="Search product e.g. Bread, Milk..."
                     value={forecastSearchQuery}
                     onChange={e => {
@@ -1379,7 +1474,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
                   )}
                 </div>
                 <select
-                  className="suggestions-select"
+                  className="suggestions-select forecast-period-select"
                   value={forecastPeriod}
                   onChange={(e) => {
                     const period = parseInt(e.target.value, 10);
@@ -1389,7 +1484,6 @@ export default function OwnerDashboard({ session, backendUrl }) {
                       fetchForecast(selectedForecastProduct, period);
                     }
                   }}
-                  style={{ padding: '6px 12px' }}
                 >
                   <option value={7}>Next 7 Days</option>
                   <option value={14}>Next 14 Days</option>
@@ -1423,8 +1517,8 @@ export default function OwnerDashboard({ session, backendUrl }) {
                 </div>
                 
                 <h4 style={{ fontSize: '14px', marginTop: '24px', marginBottom: '10px' }}>📋 Predicted Stock Recommendation Summary</h4>
-                <div style={{ overflowX: 'auto' }}>
-                  <table className="premium-table">
+                <div className="table-responsive">
+                  <table className="premium-table" style={{ minWidth: '460px' }}>
                     <thead>
                       <tr>
                         <th>Date</th>
@@ -1495,7 +1589,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               <h4 style={{ fontSize: '14px', color: 'var(--primary)', marginBottom: '14px', fontWeight: '600', letterSpacing: '0.5px' }}>
                 PERSONAL INFORMATION
               </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '14px' }}>
+              <div className="owner-profile-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '14px' }}>
                 <div>
                   <span style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>Owner Name</span>
                   <strong>{ownerProfile?.owner_name || 'N/A'}</strong>
@@ -1734,8 +1828,8 @@ export default function OwnerDashboard({ session, backendUrl }) {
                 ✔️ All products in your shop are currently above their minimum stock quantity!
               </div>
             ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="premium-table">
+              <div className="table-responsive">
+                <table className="premium-table" style={{ minWidth: '500px' }}>
                   <thead>
                     <tr>
                       <th>Product Name</th>
@@ -1819,8 +1913,8 @@ export default function OwnerDashboard({ session, backendUrl }) {
             </div>
 
             <h4 style={{ fontSize: '14px', marginBottom: '8px' }}>Itemized Order List:</h4>
-            <div style={{ overflowX: 'auto', marginBottom: '16px' }}>
-              <table className="premium-table">
+            <div className="table-responsive" style={{ marginBottom: '16px' }}>
+              <table className="premium-table" style={{ minWidth: '420px' }}>
                 <thead>
                   <tr>
                     <th>Product Name</th>
@@ -1842,11 +1936,11 @@ export default function OwnerDashboard({ session, backendUrl }) {
               </table>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', borderTop: '1px solid var(--surface-border)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', paddingTop: '12px', borderTop: '1px solid var(--surface-border)' }}>
               <div style={{ fontSize: '16px', fontWeight: '800', color: 'var(--primary)' }}>
                 Total Amount: ₹{viewingOrderModal.total_amount?.toFixed(2)}
               </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 {viewingOrderModal.payment_method === 'cash' && viewingOrderModal.payment_status !== 'paid' && (
                   <button 
                     className="btn-primary" 
