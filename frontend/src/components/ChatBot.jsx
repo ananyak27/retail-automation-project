@@ -1049,6 +1049,7 @@ export default function ChatBot({ session, backendUrl }) {
                     </div>
 
                     <div className="table-responsive">
+                      <div className="table-scroll-hint">← Swipe sideways to view all columns →</div>
                       <table className="premium-table order-items-table" style={{ width: '100%', fontSize: '12px', marginBottom: '8px' }}>
                         <thead>
                           <tr>
@@ -1258,6 +1259,7 @@ export default function ChatBot({ session, backendUrl }) {
                   </div>
 
                   <div className="table-responsive">
+                    <div className="table-scroll-hint">← Swipe sideways to view all columns →</div>
                     <table className="premium-table order-items-table" style={{ fontSize: '13px', marginBottom: '0', width: '100%', minWidth: '460px' }}>
                       <thead>
                         <tr>

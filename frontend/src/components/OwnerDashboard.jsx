@@ -51,7 +51,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
   const [reviewItems, setReviewItems] = useState([]);
   const [reviewNotes, setReviewNotes] = useState('');
   const [viewingOrderModal, setViewingOrderModal] = useState(null);
-  const [orderViewMode, setOrderViewMode] = useState('table'); // 'table' or 'cards'
+  const [orderViewMode, setOrderViewMode] = useState(() => window.innerWidth <= 768 ? 'cards' : 'table'); // 'table' or 'cards'
 
   // Selected product for Prophet forecasting
   const [selectedForecastProduct, setSelectedForecastProduct] = useState('');
@@ -1347,6 +1347,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
               </div>
 
               <div className="table-responsive">
+                <div className="table-scroll-hint">← Swipe sideways to view all product inventory columns →</div>
                 {filteredCatalogProducts.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-secondary)', fontSize: '14px' }}>
                     {catalogSearchQuery.trim()
@@ -1518,6 +1519,7 @@ export default function OwnerDashboard({ session, backendUrl }) {
                 
                 <h4 style={{ fontSize: '14px', marginTop: '24px', marginBottom: '10px' }}>📋 Predicted Stock Recommendation Summary</h4>
                 <div className="table-responsive">
+                  <div className="table-scroll-hint">← Swipe sideways to view all forecast columns →</div>
                   <table className="premium-table" style={{ minWidth: '460px' }}>
                     <thead>
                       <tr>
