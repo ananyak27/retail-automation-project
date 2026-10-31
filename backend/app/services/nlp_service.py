@@ -4,14 +4,19 @@ nlp_service.py
 Extracts (Product, Quantity, Unit) from grocery order text.
 
 Priority:
-  1. Custom trained NER model at 'models/retail_ner'  ← trained with train_spacy_ner.py
-  2. Generic en_core_web_sm (noun-based extraction)
-  3. Regex fallback (no spaCy needed)
+  1. Custom trained Retail NER model pickle ('Retail_NER_Model.pkl')
+  2. Custom trained NER model directory at 'models/retail_ner'
+  3. Generic en_core_web_sm (noun-based extraction)
+  4. Regex fallback (no spaCy needed)
 
 The custom model uses spacy.blank("en") so it works WITHOUT torch/GPU.
 """
 
 import re
+import os
+import sys
+import pickle
+import pathlib
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,6 +26,40 @@ _nlp = None
 _model_type = None   # 'custom_ner' | 'generic' | None (regex only)
 
 
+def _load_pickle_model(pkl_path: str):
+    """
+    Safely load a pickled spaCy model with cross-platform and cross-version compatibility.
+    Handles:
+      - Python 3.13+ pathlib._local redirection
+      - confection._config module redirection
+      - PosixPath to WindowsPath instantiation on Windows
+    """
+    # 1. Compatibility for pathlib._local (present when pickled under Python 3.13+)
+    if "pathlib._local" not in sys.modules:
+        sys.modules["pathlib._local"] = pathlib
+
+    # 2. Compatibility for confection._config
+    try:
+        import confection
+        if "confection._config" not in sys.modules:
+            sys.modules["confection._config"] = confection
+    except ImportError:
+        pass
+
+    # 3. Compatibility for PosixPath on Windows
+    original_posix = getattr(pathlib, "PosixPath", None)
+    if os.name == "nt" and hasattr(pathlib, "WindowsPath"):
+        pathlib.PosixPath = pathlib.WindowsPath
+
+    try:
+        with open(pkl_path, "rb") as f:
+            model = pickle.load(f)
+        return model
+    finally:
+        if original_posix is not None:
+            pathlib.PosixPath = original_posix
+
+
 def load_spacy_model():
     """Load the best available spaCy model. Returns (nlp, model_type)."""
     global _nlp, _model_type
@@ -28,23 +67,39 @@ def load_spacy_model():
     if _nlp is not None:
         return _nlp, _model_type
 
-    import os
+    # ── Try 1: Custom trained retail NER model pickle (.pkl) ───────────────────
+    possible_pkl_paths = [
+        os.path.join(os.path.dirname(__file__), "..", "ml_models", "Retail_NER_Model.pkl"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "models", "Retail_NER_Model.pkl"),
+        os.path.join(os.path.dirname(__file__), "..", "..", "Retail_NER_Model.pkl"),
+    ]
 
-    # ── Try 1: Custom trained retail NER model (no torch required) ────────────
+    for pkl_path in possible_pkl_paths:
+        pkl_path = os.path.normpath(pkl_path)
+        if os.path.isfile(pkl_path):
+            try:
+                _nlp = _load_pickle_model(pkl_path)
+                _model_type = "custom_ner"
+                logger.info(f"✅ Loaded custom retail NER model from pickle: {pkl_path}")
+                return _nlp, _model_type
+            except Exception as e:
+                logger.warning(f"Could not load custom NER pickle model from {pkl_path}: {e}")
+
+    # ── Try 2: Custom trained retail NER directory model ──────────────────────
     custom_model_path = os.path.join(os.path.dirname(__file__), "..", "..", "models", "retail_ner")
     custom_model_path = os.path.normpath(custom_model_path)
 
-    try:
-        import spacy
-        if os.path.exists(custom_model_path):
+    if os.path.exists(custom_model_path):
+        try:
+            import spacy
             _nlp = spacy.load(custom_model_path)
             _model_type = "custom_ner"
-            logger.info(f"✅ Loaded custom retail NER model from: {custom_model_path}")
+            logger.info(f"✅ Loaded custom retail NER model from directory: {custom_model_path}")
             return _nlp, _model_type
-    except Exception as e:
-        logger.warning(f"Could not load custom NER model: {e}")
+        except Exception as e:
+            logger.warning(f"Could not load custom NER directory model: {e}")
 
-    # ── Try 2: Generic en_core_web_sm ─────────────────────────────────────────
+    # ── Try 3: Generic en_core_web_sm ─────────────────────────────────────────
     try:
         import spacy
         _nlp = spacy.load("en_core_web_sm")

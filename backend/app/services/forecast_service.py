@@ -54,6 +54,49 @@ def load_prophet_models():
     return _prophet_models
 
 
+import csv
+import difflib
+import pandas as pd
+
+_name_to_model_id = None
+
+
+def _get_name_to_model_id() -> dict:
+    global _name_to_model_id
+    if _name_to_model_id is not None:
+        return _name_to_model_id
+
+    _name_to_model_id = {}
+    possible_paths = [
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "sales_data_seed.csv")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "sales_data_seed.csv")),
+        os.path.abspath(os.path.join(os.getcwd(), "sales_data_seed.csv")),
+        os.path.abspath(os.path.join(os.getcwd(), "..", "sales_data_seed.csv")),
+    ]
+
+    for p in possible_paths:
+        if os.path.exists(p):
+            try:
+                with open(p, mode="r", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        p_name = row.get("product_name", "").strip().lower()
+                        p_id = row.get("product_id")
+                        if p_name and p_id and p_name not in _name_to_model_id:
+                            try:
+                                _name_to_model_id[p_name] = int(p_id)
+                            except ValueError:
+                                pass
+                        if len(_name_to_model_id) >= 1000:
+                            break
+                logger.info(f"Loaded {len(_name_to_model_id)} product name-to-model mappings from {p}")
+                return _name_to_model_id
+            except Exception as e:
+                logger.warning(f"Error reading {p}: {e}")
+
+    return _name_to_model_id
+
+
 def get_product_model(product_id: int, db: Session = None):
     """
     Get the already-trained Prophet model for a product.
@@ -71,10 +114,29 @@ def get_product_model(product_id: int, db: Session = None):
     if db is not None:
         product = db.query(Product).filter(Product.id == product_id).first()
         if product:
-            from sqlalchemy import func
             norm_name = product.name.strip().lower()
 
-            # 1. Match by product name for any product whose ID is in models
+            # 1. Match by product name from training dataset mapping (covers all 1000 products)
+            name_map = _get_name_to_model_id()
+            if norm_name in name_map:
+                mapped_id = name_map[norm_name]
+                if mapped_id in models:
+                    return models[mapped_id]
+                if str(mapped_id) in models:
+                    return models[str(mapped_id)]
+
+            # 2. Fuzzy match product name against trained models
+            if name_map:
+                close_matches = difflib.get_close_matches(norm_name, list(name_map.keys()), n=1, cutoff=0.6)
+                if close_matches:
+                    mapped_id = name_map[close_matches[0]]
+                    if mapped_id in models:
+                        return models[mapped_id]
+                    if str(mapped_id) in models:
+                        return models[str(mapped_id)]
+
+            # 3. Fallback: match by product name for any product whose ID is in models
+            from sqlalchemy import func
             model_numeric_ids = [int(k) for k in models.keys() if str(k).isdigit()]
             if model_numeric_ids:
                 matched_in_models = db.query(Product).filter(
@@ -84,7 +146,7 @@ def get_product_model(product_id: int, db: Session = None):
                 if matched_in_models and matched_in_models.id in models:
                     return models[matched_in_models.id]
 
-            # 2. Fallback: match by product name in shop 1
+            # 4. Fallback: match by product name in shop 1
             shop1_prod = db.query(Product).filter(
                 Product.shop_id == 1,
                 func.lower(Product.name) == norm_name
@@ -172,11 +234,9 @@ def generate_forecast(
 
     try:
 
-        future = model.make_future_dataframe(
-            periods=periods,
-            freq="D",
-            include_history=False
-        )
+        start_date = datetime.date.today() + datetime.timedelta(days=1)
+        future_dates = [start_date + datetime.timedelta(days=i) for i in range(periods)]
+        future = pd.DataFrame({"ds": pd.to_datetime(future_dates)})
 
         forecast = model.predict(future)
 
