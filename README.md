@@ -1,17 +1,45 @@
-# AI-Powered Multimodal Retail Automation and Predictive Business Intelligence System
 
-This repository contains the complete implementation of an AI-powered retail automation and predictive business intelligence system designed for small-scale retail businesses. The platform enables multiple shop owners and customers to register using Firebase Phone Authentication, manage independent retail stores, process chatbot-assisted customer orders from text and handwritten images, generate Razorpay QR code payments, monitor inventory in real time, and forecast future product demand using Artificial Intelligence and Machine Learning.
+PROJECT TITLE:
+AI-Powered Multimodal Retail Automation and Predictive Business Intelligence System
 
----
+COLLEGE:
+Canara Engineering College, Benjanapadavu, Mangaluru - 574218
+Department of Artificial Intelligence and Machine Learning
 
-# Features
+TEAM NUMBER:
+Team 07
 
+TEAM MEMBERS AND USN:
+1. Ananya Hebbar       USN: 4CB23AI011
+2. P Harshitha         USN: 4CB23AI064
+3. Abhijna V N         USN: 4CB23AI005
+
+
+PROJECT INSTALLATION LOCATION:
+AIL06 – Intelligent Systems Laboratory
+System Number: 
+
+================================================================================
+PROJECT OVERVIEW
+================================================================================
+This repository contains the complete implementation of an AI-powered retail
+automation and predictive business intelligence system designed for small-scale
+retail businesses. The platform enables multiple shop owners and customers to
+register using Firebase Phone Authentication, manage independent retail stores,
+process chatbot-assisted customer orders from text and handwritten images,
+generate Razorpay QR code payments, monitor inventory in real time, and
+forecast future product demand using Artificial Intelligence and Machine
+Learning.
+
+================================================================================
+FEATURES
+================================================================================
 - Role-based Firebase Phone Authentication
 - Multiple shop owner and customer registration
 - Multi-store retail management
 - AI-powered handwritten grocery list OCR using Tesseract OCR
-- NLP-based product information extraction using spaCy
-- Fuzzy product catalog matching
+- NLP-based product information extraction using spaCy NER
+- Fuzzy product catalog matching using difflib
 - Chatbot-assisted order placement
 - Product and inventory management
 - Razorpay QR code payment integration
@@ -19,12 +47,11 @@ This repository contains the complete implementation of an AI-powered retail aut
 - Demand forecasting using Meta Prophet
 - PostgreSQL database integration
 - FastAPI backend with React (Vite) frontend
+- React Native (Expo) mobile application
 
----
-
-# Project Structure
-
-```text
+================================================================================
+PROJECT STRUCTURE
+================================================================================
 retail_automation_project/
 ├── backend/
 │   ├── app/
@@ -95,166 +122,137 @@ retail_automation_project/
 ├── Retail_NLP_Training_Dataset_Excel.xlsx
 ├── items list images.zip
 ├── .gitignore
-└── README.md
-```
+└── Readme.txt
 
----
+================================================================================
+DATASETS USED & SOURCES
+================================================================================
+1. Sales History Dataset:
+   - File: sales_data_seed.csv
+   - Source: Synthetically generated historical sales transactions
+   - Duration: 90 Days
+   - Records: 161,000 sales transactions across 1,000 retail catalog items
+   - Features: product_id, product_name, unit, quantity, price, sold_at
+   - Details: Contains daily sales records, weekly seasonal demand variations,
+     random fluctuations, and product-specific demand patterns. Used for
+     database seeding and Meta Prophet time-series demand forecasting.
 
-# Sales History Dataset
+2. Newly Generated Dataset (Retail NLP Training Dataset):
+   - Files: Retail_NLP_Training_Dataset.jsonl & Retail_NLP_Training_Dataset_Excel.xlsx
+   - Source: Newly generated and audited domain-specific dataset (generated via
+     nlp_dataset_scripts/generate_dataset.py)
+   - Records: 3,152 annotated grocery order samples
+   - Format: JSON Lines with character span offsets and entity tags
+   - Features: text, entities (PRODUCT, QUANTITY, UNIT)
+   - Details: Custom created and verified to train the project's domain-specific
+     spaCy Named Entity Recognition (NER) model (Retail_NER_Model.pkl).
 
-The repository includes a synthetic historical sales dataset:
+3. Sample Handwritten Grocery Lists:
+   - File: items list images.zip
+   - Source: Collected real-world handwritten grocery lists
+   - Details: Scanned and photographed notes used to benchmark and evaluate
+     the Tesseract OCR image preprocessing and text recognition pipeline.
 
-* **File:** `sales_data_seed.csv`
-* **Duration:** 90 Days
-* **Products:** 1,000 retail catalog items (161,000 transaction records)
+================================================================================
+TECHNOLOGY STACK & OFFICIAL DOWNLOAD / DOCUMENTATION LINKS
+================================================================================
+Frontend Technologies:
+- React.js: https://react.dev/
+- Vite: https://vitejs.dev/
+- HTML5 & CSS3
+- Firebase Authentication: https://firebase.google.com/docs/auth
 
-The dataset contains:
+Mobile Application:
+- React Native: https://reactnative.dev/
+- Expo: https://expo.dev/
 
-* Daily sales records
-* Weekly seasonal demand variations
-* Random sales fluctuations
-* Product-specific demand patterns
+Backend Technologies:
+- FastAPI: https://fastapi.tiangolo.com/
+- Python (v3.11.9): https://www.python.org/downloads/release/python-3119/
+- Uvicorn: https://www.uvicorn.org/
+- WebSockets: https://websockets.readthedocs.io/
 
-This dataset is used for training and generating demand forecasts using the Meta Prophet forecasting model.
+Database Technologies:
+- PostgreSQL: https://www.postgresql.org/download/windows/
+- SQLAlchemy ORM: https://www.sqlalchemy.org/
+- psycopg2-binary: https://www.psycopg.org/
 
----
+AI / Machine Learning Technologies:
+- Tesseract OCR (Windows UB-Mannheim): https://github.com/UB-Mannheim/tesseract/wiki
+- spaCy (v3.7.5): https://spacy.io/
+- Meta Prophet: https://facebook.github.io/prophet/
+- Python difflib: https://docs.python.org/3/library/difflib.html
 
-# Technology Stack
+Payment Integration:
+- Razorpay Payments API: https://razorpay.com/docs/api/
 
-## Frontend
+================================================================================
+INSTALLATION PREREQUISITES
+================================================================================
+- Python 3.10 or later (Python 3.11.9 recommended)
+- Node.js (v18 or later) & npm
+- PostgreSQL (v15 or later)
+- Tesseract OCR Engine installed to C:\Program Files\Tesseract-OCR
 
-* React.js
-* Vite
-* HTML
-* CSS
-* Firebase Authentication
-
-## Mobile
-
-* React Native
-* Expo
-
-## Backend
-
-* FastAPI
-* Python
-
-## Database
-
-* PostgreSQL
-* SQLAlchemy
-
-## AI / Machine Learning
-
-* Tesseract OCR
-* spaCy
-* Meta Prophet
-* difflib
-
-## Payment
-
-* Razorpay QR Payments
-
----
-
-# Installation
-
-## Prerequisites
-
-* Python 3.10 or later
-* Node.js (v18 or later)
-* PostgreSQL
-* Tesseract OCR
-
-Create the PostgreSQL database:
-
-```sql
+Database Initialization:
+Create the PostgreSQL database in psql or pgAdmin:
 CREATE DATABASE retail_automation;
-```
 
----
+================================================================================
+BACKEND SETUP
+================================================================================
+1. Navigate to the backend directory:
+   cd backend
 
-# Backend Setup
+2. Create and activate a virtual environment:
+   python -m venv venv
+   venv\Scripts\activate
 
-Navigate to the backend directory.
+3. Install dependencies:
+   pip install -r requirements.txt
+   pip install pytesseract
+   python -m spacy download en_core_web_sm
 
-```bash
-cd backend
-```
+4. Create .env file by copying .env.example:
+   copy .env.example .env
 
-Install dependencies.
+5. Configure database credentials and settings in .env.
 
-```bash
-pip install -r requirements.txt
-pip install pytesseract
-python -m spacy download en_core_web_sm
-```
+6. Seed the database:
+   python seed_database.py
 
-Create a `.env` file by copying `.env.example`.
+7. Run the FastAPI server:
+   python run.py
 
-Configure the required environment variables.
+   Backend runs at: http://127.0.0.1:8000
+   API Docs: http://127.0.0.1:8000/docs
 
-Seed the database.
+================================================================================
+FRONTEND SETUP
+================================================================================
+1. Navigate to the frontend directory:
+   cd frontend
 
-```bash
-python seed_database.py
-```
+2. Install dependencies:
+   npm install
 
-Run the FastAPI server.
+3. Run the development server:
+   npm run dev
 
-```bash
-python run.py
-```
+   Frontend runs at: http://localhost:5173
 
-Backend runs at:
-
-```
-http://127.0.0.1:8000
-```
-
----
-
-# Frontend Setup
-
-Navigate to the frontend directory.
-
-```bash
-cd frontend
-```
-
-Install dependencies.
-
-```bash
-npm install
-```
-
-Run the development server.
-
-```bash
-npm run dev
-```
-
-Frontend runs at:
-
-```
-http://localhost:5173
-```
-
----
-
-# Authentication
-
+================================================================================
+AUTHENTICATION
+================================================================================
 The application uses Firebase Phone Authentication with role-based login.
 
-### Shop Owner
-
+Shop Owner:
 - Register/Login using phone number
 - OTP verification
 - Manage shop, products, inventory and orders
 - View dashboard and forecasting
 
-### Customer
-
+Customer:
 - Register/Login using phone number
 - OTP verification
 - Select any available shop
@@ -262,14 +260,13 @@ The application uses Firebase Phone Authentication with role-based login.
 - Complete Razorpay QR payments
 - Receive real-time order updates
 
-### Developer Mode
+Developer Mode:
+For local development and laboratory evaluation, a developer login bypass is
+available when Firebase is not configured.
 
-For local development, a developer login bypass is available when Firebase is not configured.
-
----
-
-# Key Functionalities
-
+================================================================================
+KEY FUNCTIONALITIES
+================================================================================
 - Multiple shop owners can register, create, and manage their retail shops.
 - Multiple customers can register and place orders.
 - Customers can select any available shop before placing an order.
@@ -282,49 +279,41 @@ For local development, a developer login bypass is available when Firebase is no
 - Shop owners receive real-time order notifications using WebSockets.
 - Prophet forecasting predicts future product demand using historical sales data.
 
----
+================================================================================
+DEMAND FORECASTING
+================================================================================
+The forecasting module uses Meta Prophet to predict future product demand
+based on historical sales data.
 
-# Forecasting
+The model is pre-trained using the included 90-day sales dataset
+(sales_data_seed.csv) and generates demand forecasts for 7, 14, and 30-day
+inventory planning.
 
-The forecasting module uses **Meta Prophet** to predict future product demand based on historical sales data.
+================================================================================
+ENVIRONMENT VARIABLES (.env)
+================================================================================
 
-The model is trained using the included 90-day sales dataset and generates demand forecasts for inventory planning.
+Create a .env file inside the backend directory.
 
----
+Required variables:
 
-# Environment Variables
-
-Create a `.env` file inside the backend directory.
-
-Example:
-
-```env
 DATABASE_URL=
-
 JWT_SECRET=
-
 JWT_ALGORITHM=HS256
-
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
-
+ENVIRONMENT=development
+CORS_ORIGINS=
 RAZORPAY_KEY_ID=
-
 RAZORPAY_KEY_SECRET=
-
 RAZORPAY_WEBHOOK_SECRET=
-
 FIREBASE_PROJECT_ID=
-
 FIREBASE_SERVICE_ACCOUNT_JSON=
-```
 
----
-
-# Future Improvements
-
+================================================================================
+FUTURE IMPROVEMENTS
+================================================================================
 - Email notifications
 - Advanced analytics dashboard
 - Sales reports
 - Cloud deployment
-
----
+================================================================================
