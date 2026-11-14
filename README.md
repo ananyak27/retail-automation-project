@@ -9,7 +9,7 @@ This repository contains the complete implementation of an AI-powered retail aut
 - Role-based Firebase Phone Authentication
 - Multiple shop owner and customer registration
 - Multi-store retail management
-- AI-powered handwritten invoice OCR using Microsoft TrOCR
+- AI-powered handwritten grocery list OCR using Tesseract OCR
 - NLP-based product information extraction using spaCy
 - Fuzzy product catalog matching
 - Chatbot-assisted order placement
@@ -28,6 +28,9 @@ This repository contains the complete implementation of an AI-powered retail aut
 retail_automation_project/
 ├── backend/
 │   ├── app/
+│   │   ├── ml_models/
+│   │   │   ├── prophet_final_models.pkl
+│   │   │   └── Retail_NER_Model.pkl
 │   │   ├── services/
 │   │   │   ├── __init__.py
 │   │   │   ├── ocr_service.py
@@ -42,23 +45,33 @@ retail_automation_project/
 │   │   │   ├── order.py
 │   │   │   ├── payment.py
 │   │   │   ├── forecast.py
-│   │   │   └── alert.py
+│   │   │   ├── alert.py
+│   │   │   └── chat.py
 │   │   ├── __init__.py
 │   │   ├── config.py
 │   │   ├── database.py
 │   │   ├── models.py
 │   │   ├── schemas.py
 │   │   └── websocket_manager.py
+│   ├── models/
+│   │   ├── Retail_NER_Model.pkl
+│   │   └── retail_ner/
 │   ├── .env.example
 │   ├── requirements.txt
 │   ├── run.py
-│   └── seed_database.py
+│   ├── seed_database.py
+│   ├── test_auth_flows.py
+│   ├── test_complete_order_flow.py
+│   └── test_razorpay_flow.py
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── Login.jsx
 │   │   │   ├── ChatBot.jsx
-│   │   │   └── OwnerDashboard.jsx
+│   │   │   ├── OwnerDashboard.jsx
+│   │   │   └── OwnerRegister.jsx
+│   │   ├── utils/
+│   │   │   └── dateTimeUtils.js
 │   │   ├── App.jsx
 │   │   ├── firebaseConfig.js
 │   │   ├── main.jsx
@@ -66,8 +79,21 @@ retail_automation_project/
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
-├── seed_dataset_generator.py
+├── mobile/
+│   ├── screens/
+│   │   ├── tabs/
+│   │   ├── CustomerChatScreen.js
+│   │   ├── LoginScreen.js
+│   │   ├── OwnerDashboardScreen.js
+│   │   └── OwnerRegisterScreen.js
+│   ├── App.js
+│   ├── app.json
+│   └── package.json
+├── nlp_dataset_scripts/
 ├── sales_data_seed.csv
+├── Retail_NLP_Training_Dataset.jsonl
+├── Retail_NLP_Training_Dataset_Excel.xlsx
+├── items list images.zip
 ├── .gitignore
 └── README.md
 ```
@@ -80,7 +106,7 @@ The repository includes a synthetic historical sales dataset:
 
 * **File:** `sales_data_seed.csv`
 * **Duration:** 90 Days
-* **Products:** Rice, Milk, Soap, Sugar and Apple
+* **Products:** 1,000 retail catalog items (161,000 transaction records)
 
 The dataset contains:
 
@@ -103,6 +129,11 @@ This dataset is used for training and generating demand forecasts using the Meta
 * CSS
 * Firebase Authentication
 
+## Mobile
+
+* React Native
+* Expo
+
 ## Backend
 
 * FastAPI
@@ -115,10 +146,10 @@ This dataset is used for training and generating demand forecasts using the Meta
 
 ## AI / Machine Learning
 
-* Microsoft TrOCR
+* Tesseract OCR
 * spaCy
 * Meta Prophet
-* FuzzyWuzzy
+* difflib
 
 ## Payment
 
@@ -133,6 +164,7 @@ This dataset is used for training and generating demand forecasts using the Meta
 * Python 3.10 or later
 * Node.js (v18 or later)
 * PostgreSQL
+* Tesseract OCR
 
 Create the PostgreSQL database:
 
@@ -154,6 +186,8 @@ Install dependencies.
 
 ```bash
 pip install -r requirements.txt
+pip install pytesseract
+python -m spacy download en_core_web_sm
 ```
 
 Create a `.env` file by copying `.env.example`.
@@ -290,10 +324,7 @@ FIREBASE_SERVICE_ACCOUNT_JSON=
 
 - Email notifications
 - Advanced analytics dashboard
-- Inventory alerts
 - Sales reports
 - Cloud deployment
-- Mobile application
 
 ---
-
