@@ -159,10 +159,11 @@ async def process_successful_payment(
         product.stock = max(0.0, product.stock - item.quantity)
 
         history = SalesHistory(
+            shop_id=locked_order.shop_id,
             product_id=product.id,
             quantity=item.quantity,
             price=item.price_at_order,
-            sold_at=datetime.datetime.utcnow(),
+            sold_at=locked_order.paid_at or datetime.datetime.utcnow(),
         )
         db.add(history)
 

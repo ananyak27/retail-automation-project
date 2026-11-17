@@ -50,7 +50,7 @@ retail_automation_project/
 ├── backend/
 │   ├── app/
 │   │   ├── ml_models/
-│   │   │   ├── prophet_final_models.pkl
+│   │   │   ├── sales_model.pkl
 │   │   │   └── Retail_NER_Model.pkl
 │   │   ├── services/
 │   │   │   ├── __init__.py
@@ -202,34 +202,29 @@ CREATE DATABASE retail_automation;
    cd backend
    ```
 
-2. Create and activate a virtual environment:
-   ```cmd
-   python -m venv venv
-   venv\Scripts\activate
-   ```
-
-3. Install dependencies:
+2. Install dependencies:
    ```bash
    pip install -r requirements.txt
    pip install pytesseract
    python -m spacy download en_core_web_sm
    ```
 
-4. Create `.env` file by copying `.env.example`:
+3. Create `.env` file by copying `.env.example`:
    ```cmd
    copy .env.example .env
    ```
 
-5. Configure database credentials and settings in `.env`.
+4. Configure database credentials and settings in `.env`.
 
-6. Seed the database:
+5. Seed the database:
    ```bash
    python seed_database.py
    ```
 
-7. Run the FastAPI server:
-   ```bash
-   python run.py
+6. Run the FastAPI server:
+   ```cmd
+   cd backend
+   python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
    ```
 
    - Backend runs at: `http://127.0.0.1:8000`
@@ -250,8 +245,8 @@ CREATE DATABASE retail_automation;
    ```
 
 3. Run the development server:
-   ```bash
-   npm run dev
+   ```cmd
+   npm run dev -- --host 0.0.0.0
    ```
 
    - Frontend runs at: `http://localhost:5173`

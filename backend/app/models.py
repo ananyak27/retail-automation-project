@@ -38,6 +38,7 @@ class Shop(Base):
     products = relationship("Product", back_populates="shop")
     orders = relationship("Order", back_populates="shop")
     alerts = relationship("Alert", back_populates="shop")
+    sales_history = relationship("SalesHistory", back_populates="shop")
 
 
 class Product(Base):
@@ -111,6 +112,7 @@ class SalesHistory(Base):
     __tablename__ = "sales_history"
 
     id = Column(Integer, primary_key=True, index=True)
+    shop_id = Column(Integer, ForeignKey("shops.id", ondelete="CASCADE"), nullable=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
     quantity = Column(Float, nullable=False)
     price = Column(Float, nullable=False)
@@ -118,6 +120,7 @@ class SalesHistory(Base):
 
     # Relationships
     product = relationship("Product", back_populates="sales_history")
+    shop = relationship("Shop", back_populates="sales_history")
 
 
 class Alert(Base):
