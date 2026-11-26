@@ -2,19 +2,7 @@
 
 **COLLEGE:**  
 Canara Engineering College, Benjanapadavu, Mangaluru - 574218  
-Department of Artificial Intelligence and Machine Learning  
-
-**TEAM NUMBER:**  
-Team 07  
-
-**TEAM MEMBERS AND USN:**  
-1. Ananya Hebbar &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; USN: 4CB23AI011  
-2. P Harshitha &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; USN: 4CB23AI064  
-3. Abhijna V N &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; USN: 4CB23AI005  
-
-**PROJECT INSTALLATION LOCATION:**  
-AIL06 – Intelligent Systems Laboratory  
-System Number:  
+Department of Artificial Intelligence and Machine Learning    
 
 ---
 
